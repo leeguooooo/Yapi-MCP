@@ -45,6 +45,27 @@ export class YApiService {
   }
 
   /**
+   * 动态更新某个项目的 token（用于全局模式缓存刷新）
+   */
+  setProjectToken(projectId: string, token: string): void {
+    if (!projectId || !token) return;
+    this.tokenMap.set(String(projectId), String(token));
+  }
+
+  /**
+   * 批量更新项目 token（用于全局模式缓存刷新）
+   */
+  setProjectTokens(tokens: Map<string, string>, options: { overwrite?: boolean } = {}): void {
+    const overwrite = options.overwrite !== false;
+    tokens.forEach((token, projectId) => {
+      const pid = String(projectId);
+      if (!pid || !token) return;
+      if (!overwrite && this.tokenMap.has(pid)) return;
+      this.tokenMap.set(pid, String(token));
+    });
+  }
+
+  /**
    * 获取已配置的项目ID列表
    */
   getConfiguredProjectIds(): string[] {
@@ -86,7 +107,8 @@ export class YApiService {
       const token = projectId ? this.getToken(projectId) : this.defaultToken;
       
       if (!token) {
-        throw new Error(`未配置项目ID ${projectId} 的token`);
+        const pid = projectId ? `projectId=${projectId}` : "projectId=未提供";
+        throw new Error(`未配置 token（${pid}）。如使用全局模式，请先调用 yapi_update_token 生成本地缓存；或通过 --yapi-token / YAPI_TOKEN 配置项目 token`);
       }
       
       let response;
