@@ -51,7 +51,11 @@ Yapi Auto MCP Server 是一个基于 [Model Context Protocol](https://modelconte
 
 ## 快速开始
 
-### 推荐方式：使用 npx（无需安装）
+### 推荐方式：用 Cross Request Master 一键生成 MCP 配置（免手动找 Token）
+
+如果你日常就在浏览器里使用 YApi，推荐安装 Chrome 扩展 [cross-request-master](https://github.com/leeguooooo/cross-request-master)。它会在 YApi 接口详情页（基本信息区域右上角）提供 **「MCP 配置」** 按钮，自动根据当前项目拼好 Cursor / Codex / Gemini CLI / Claude Code 的配置并支持一键复制（包含 `--yapi-base-url`、`--yapi-token=projectId:token` 等参数）。
+
+### 手动方式：使用 npx（无需安装）
 
 1. **获取 YApi Token**：登录你的 YApi 平台，在项目设置中获取 Token
 2. **配置 Cursor**：在 Cursor 设置中添加 MCP 服务器：
@@ -186,6 +190,8 @@ node dist/cli.js --stdio
 1. 登录你的 YApi 平台
 2. 进入项目设置页面
 3. 在 Token 配置中生成或查看 Token
+
+不想手动找 Token 的话，可以用 [cross-request-master](https://github.com/leeguooooo/cross-request-master) 在接口详情页一键生成 MCP 配置（会自动带上 `projectId:token`）。
 
 ![Token 获取示例](./images/token.png)
 
