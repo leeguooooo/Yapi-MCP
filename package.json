@@ -26,7 +26,7 @@
     "pub:release": "pnpm build && npm publish"
   },
   "engines": {
-    "node": "^20.17.0"
+    "node": ">=20"
   },
   "repository": {
     "type": "git",
