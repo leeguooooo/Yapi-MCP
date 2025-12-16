@@ -54,7 +54,7 @@ Yapi Auto MCP Server 是一个基于 [Model Context Protocol](https://modelconte
 
 ### 推荐方式：用 Cross Request Master 一键生成 MCP 配置（免手动找 Token）
 
-如果你日常就在浏览器里使用 YApi，推荐安装 Chrome 扩展 [cross-request-master](https://github.com/leeguooooo/cross-request-master)。它会在 YApi 接口详情页（基本信息区域右上角）提供 **「当前项目 MCP 配置」** / **「整个项目 MCP 配置」** 按钮，可一键生成并复制配置：
+如果你日常就在浏览器里使用 YApi，推荐安装 Chrome 扩展 [cross-request-master](https://github.com/leeguooooo/cross-request-master)。它会在 YApi 接口详情页（基本信息区域右上角）提供 **「当前项目 MCP 配置」** / **「所有项目 MCP 配置」** 按钮，可一键生成并复制配置：
 
 - 当前项目：使用 `--yapi-token=projectId:token`
 - 整个项目（全局模式）：使用 `--yapi-auth-mode=global`（账号密码），启动后再调用一次 `yapi_update_token` 自动缓存所有项目 token
