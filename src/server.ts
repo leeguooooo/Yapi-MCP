@@ -8,6 +8,7 @@ import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { YApiService } from "./services/yapi/api";
 import { ProjectInfoCache } from "./services/yapi/cache";
 import { Logger } from "./services/yapi/logger";
+import { YApiAuthService } from "./services/yapi/auth";
 
 type JsonLike = unknown;
 
@@ -61,13 +62,33 @@ export class YapiMcpServer {
   private readonly yapiService: YApiService;
   private readonly projectInfoCache: ProjectInfoCache;
   private readonly logger: Logger;
+  private readonly authService: YApiAuthService | null;
+  private readonly authMode: "token" | "global";
   private sseTransport: SSEServerTransport | null = null;
   private readonly isStdioMode: boolean;
 
-  constructor(yapiBaseUrl: string, yapiToken: string, yapiLogLevel: string = "info", yapiCacheTTL: number = 10) {
+  constructor(
+    yapiBaseUrl: string,
+    yapiToken: string,
+    yapiLogLevel: string = "info",
+    yapiCacheTTL: number = 10,
+    auth?: { mode?: "token" | "global"; email?: string; password?: string },
+  ) {
     this.logger = new Logger("YapiMCP", yapiLogLevel);
     this.yapiService = new YApiService(yapiBaseUrl, yapiToken, yapiLogLevel);
     this.projectInfoCache = new ProjectInfoCache(yapiCacheTTL);
+    this.authMode = auth?.mode ?? (auth?.email && auth?.password ? "global" : "token");
+    this.authService =
+      this.authMode === "global" && auth?.email && auth?.password
+        ? new YApiAuthService(yapiBaseUrl, auth.email, auth.password, yapiLogLevel)
+        : null;
+
+    if (this.authService) {
+      // 尝试从全局缓存恢复项目 token，避免每次都需要手动刷新
+      const cachedTokens = this.authService.loadCachedProjectTokens();
+      this.yapiService.setProjectTokens(cachedTokens, { overwrite: false });
+      this.logger.info(`全局模式已启用：已从本地缓存加载 ${cachedTokens.size} 个项目 token`);
+    }
     // 判断是否为stdio模式
     this.isStdioMode = process.env.NODE_ENV === "cli" || process.argv.includes("--stdio");
     
@@ -272,6 +293,50 @@ export class YapiMcpServer {
 
       return { ok: true, params, isUpdate };
     };
+
+    // 全局模式：登录并刷新本地项目 token 缓存
+    this.server.tool(
+      "yapi_update_token",
+      "全局模式：使用用户名/密码登录 YApi，刷新本地缓存的 projectId -> token（用于后续调用开放 API）",
+      {
+        forceLogin: z.boolean().optional().describe("是否强制重新登录（忽略已缓存的 cookie）"),
+      },
+      async ({ forceLogin }) => {
+        try {
+          if (!this.authService) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text:
+                    "未启用全局模式：请在 MCP 配置中提供 --yapi-auth-mode=global 以及 --yapi-email/--yapi-password（或对应环境变量），然后再调用 yapi_update_token。",
+                },
+              ],
+            };
+          }
+
+          const { tokens, groups, projects } = await this.authService.refreshProjectTokens({ forceLogin });
+          this.yapiService.setProjectTokens(tokens, { overwrite: true });
+
+          // 刷新项目信息/分类缓存（可选，但有助于 list/search）
+          await this.yapiService.loadAllProjectInfo();
+          this.projectInfoCache.saveToCache(this.yapiService.getProjectInfoCache());
+          await this.yapiService.loadAllCategoryLists();
+
+          return {
+            content: [
+              {
+                type: "text",
+                text: `token 刷新完成：分组 ${groups.length} 个，项目 ${projects.length} 个，已缓存 token ${tokens.size} 个。`,
+              },
+            ],
+          };
+        } catch (error) {
+          this.logger.error("刷新 token 失败:", error);
+          return { content: [{ type: "text", text: `刷新 token 失败: ${error}` }] };
+        }
+      },
+    );
 
     // 获取API接口详情
     this.server.tool(

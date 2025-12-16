@@ -20,7 +20,12 @@ export async function startServer(): Promise<void> {
     config.yapiBaseUrl, 
     config.yapiToken, 
     config.yapiLogLevel, 
-    config.yapiCacheTTL
+    config.yapiCacheTTL,
+    {
+      mode: config.yapiAuthMode,
+      email: config.yapiEmail,
+      password: config.yapiPassword,
+    },
   );
 
   // Check if we're running in stdio mode (e.g., via CLI)
@@ -41,6 +46,7 @@ export async function startServer(): Promise<void> {
   logger.info("- yapi_search_apis: 搜索YApi接口");
   logger.info("- yapi_list_projects: 列出YApi的项目ID和项目名称");
   logger.info("- yapi_get_categories: 获取YApi项目下的接口分类列表");
+  logger.info("- yapi_update_token: 全局模式登录并刷新本地 token 缓存");
 }
 
 // If this file is being run directly, start the server

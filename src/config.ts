@@ -9,12 +9,18 @@ config();
 interface ServerConfig {
   yapiBaseUrl: string;
   yapiToken: string;
+  yapiAuthMode: "token" | "global";
+  yapiEmail: string;
+  yapiPassword: string;
   port: number;
   yapiCacheTTL: number; // 缓存时效，单位为分钟
   yapiLogLevel: string; // 日志级别：debug, info, warn, error
   configSources: {
     yapiBaseUrl: "cli" | "env" | "default";
     yapiToken: "cli" | "env" | "default";
+    yapiAuthMode: "cli" | "env" | "default";
+    yapiEmail: "cli" | "env" | "default";
+    yapiPassword: "cli" | "env" | "default";
     port: "cli" | "env" | "default";
     yapiCacheTTL: "cli" | "env" | "default";
     yapiLogLevel: "cli" | "env" | "default";
@@ -26,9 +32,18 @@ function maskApiKey(key: string): string {
   return `****${key.slice(-4)}`;
 }
 
+function maskSecret(value: string): string {
+  if (!value) return "";
+  if (value.length <= 2) return "**";
+  return `${value[0]}***${value[value.length - 1]}`;
+}
+
 interface CliArgs {
   "yapi-base-url"?: string;
   "yapi-token"?: string;
+  "yapi-auth-mode"?: "token" | "global";
+  "yapi-email"?: string;
+  "yapi-password"?: string;
   port?: number;
   "yapi-cache-ttl"?: number;
   "yapi-log-level"?: string;
@@ -45,6 +60,19 @@ export function getServerConfig(): ServerConfig {
       "yapi-token": {
         type: "string",
         description: "YApi服务器授权Token",
+      },
+      "yapi-auth-mode": {
+        type: "string",
+        description: "鉴权模式：token=项目 token；global=用户名/密码登录并缓存项目 token",
+        choices: ["token", "global"],
+      },
+      "yapi-email": {
+        type: "string",
+        description: "全局模式登录邮箱（/api/user/login 的 email 字段）",
+      },
+      "yapi-password": {
+        type: "string",
+        description: "全局模式登录密码（/api/user/login 的 password 字段）",
       },
       port: {
         type: "number",
@@ -66,12 +94,18 @@ export function getServerConfig(): ServerConfig {
   const config: ServerConfig = {
     yapiBaseUrl: "http://localhost:3000",
     yapiToken: "",
+    yapiAuthMode: "token",
+    yapiEmail: "",
+    yapiPassword: "",
     port: 3388,
     yapiCacheTTL: 10, // 默认缓存10分钟
     yapiLogLevel: "info", // 默认日志级别
     configSources: {
       yapiBaseUrl: "default",
       yapiToken: "default",
+      yapiAuthMode: "default",
+      yapiEmail: "default",
+      yapiPassword: "default",
       port: "default",
       yapiCacheTTL: "default",
       yapiLogLevel: "default",
@@ -95,6 +129,38 @@ export function getServerConfig(): ServerConfig {
   } else if (process.env.YAPI_TOKEN) {
     config.yapiToken = process.env.YAPI_TOKEN;
     config.configSources.yapiToken = "env";
+  }
+
+  // Handle YAPI_EMAIL / YAPI_PASSWORD (global mode)
+  if (argv["yapi-email"]) {
+    config.yapiEmail = argv["yapi-email"];
+    config.configSources.yapiEmail = "cli";
+  } else if (process.env.YAPI_EMAIL) {
+    config.yapiEmail = process.env.YAPI_EMAIL;
+    config.configSources.yapiEmail = "env";
+  }
+
+  if (argv["yapi-password"]) {
+    config.yapiPassword = argv["yapi-password"];
+    config.configSources.yapiPassword = "cli";
+  } else if (process.env.YAPI_PASSWORD) {
+    config.yapiPassword = process.env.YAPI_PASSWORD;
+    config.configSources.yapiPassword = "env";
+  }
+
+  // Handle YAPI_AUTH_MODE
+  if (argv["yapi-auth-mode"]) {
+    config.yapiAuthMode = argv["yapi-auth-mode"];
+    config.configSources.yapiAuthMode = "cli";
+  } else if (process.env.YAPI_AUTH_MODE) {
+    const mode = process.env.YAPI_AUTH_MODE.toLowerCase();
+    if (mode === "token" || mode === "global") {
+      config.yapiAuthMode = mode;
+      config.configSources.yapiAuthMode = "env";
+    }
+  } else {
+    // default: token 优先；未配置 token 且提供了账号密码则自动切到 global
+    config.yapiAuthMode = config.yapiToken ? "token" : config.yapiEmail && config.yapiPassword ? "global" : "token";
   }
 
   // Handle PORT
@@ -141,6 +207,11 @@ export function getServerConfig(): ServerConfig {
   );
   logger.info(
     `- YAPI_TOKEN: ${config.yapiToken ? maskApiKey(config.yapiToken) : "未配置"} (source: ${config.configSources.yapiToken})`,
+  );
+  logger.info(`- YAPI_AUTH_MODE: ${config.yapiAuthMode} (source: ${config.configSources.yapiAuthMode})`);
+  logger.info(`- YAPI_EMAIL: ${config.yapiEmail || "未配置"} (source: ${config.configSources.yapiEmail})`);
+  logger.info(
+    `- YAPI_PASSWORD: ${config.yapiPassword ? maskSecret(config.yapiPassword) : "未配置"} (source: ${config.configSources.yapiPassword})`,
   );
   logger.info(`- PORT: ${config.port} (source: ${config.configSources.port})`);
   logger.info(`- YAPI_CACHE_TTL: ${config.yapiCacheTTL} 分钟 (source: ${config.configSources.yapiCacheTTL})`);
