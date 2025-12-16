@@ -20,8 +20,14 @@ Yapi Auto MCP Server 是一个基于 [Model Context Protocol](https://modelconte
 
 - **yapi_search_apis**: 按名称、路径、标签等条件搜索接口
 - **yapi_get_api_desc**: 获取特定接口的详细信息（请求/响应结构、参数等）
+- **yapi_interface_get**: 获取接口原始数据（对应 `/api/interface/get`）
+- **yapi_interface_list**: 获取接口列表（对应 `/api/interface/list`）
+- **yapi_interface_list_cat**: 获取分类下接口列表（对应 `/api/interface/list_cat`）
+- **yapi_interface_list_menu**: 获取接口菜单列表（对应 `/api/interface/list_menu`）
 - **yapi_list_projects**: 列出所有可访问的项目
-- **yapi_get_categories**: 获取项目下的接口分类和接口列表
+- **yapi_project_get**: 获取项目详情（对应 `/api/project/get`）
+- **yapi_get_categories**: 获取项目下的接口分类和接口列表（支持只返回分类/或包含接口列表）
+- **yapi_interface_get_cat_menu**: 获取分类菜单（对应 `/api/interface/getCatMenu`）
 
 ### ✏️ 接口管理
 
@@ -29,6 +35,12 @@ Yapi Auto MCP Server 是一个基于 [Model Context Protocol](https://modelconte
   - 支持完整的接口定义（路径、方法、参数、请求体、响应等）
   - 支持 JSON Schema 和表单数据格式
   - 自动处理接口状态和分类管理
+  - 建议把「枚举值/中文备注/示例」优先写在 `req_params` / `req_query` / `req_headers` / `req_body_*` / `res_body`，`desc` 只写一句话简介；更新接口时未提供的字段会尽量保留原值
+- **yapi_interface_add**: 新增接口（对应 `/api/interface/add`）
+- **yapi_interface_up**: 更新接口（对应 `/api/interface/up`）
+- **yapi_interface_save**: 新增或更新接口（对应 `/api/interface/save`）
+- **yapi_interface_add_cat**: 新增接口分类（对应 `/api/interface/add_cat`）
+- **yapi_open_import_data**: 服务端数据导入（对应 `/api/open/import_data`）
 
 ### 🎯 智能特性
 
