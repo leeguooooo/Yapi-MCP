@@ -5,6 +5,10 @@
 // 接口详细信息
 export interface ApiInterface {
   _id: string;
+  project_id?: number | string;
+  catid?: string;
+  status?: string;
+  tag?: string[];
   title: string;
   path: string;
   method: string;
@@ -14,10 +18,15 @@ export interface ApiInterface {
   req_query: any[];
   req_body_type: string;
   req_body_other: string;
+  req_body_is_json_schema?: boolean;
   res_body_type: string;
   res_body: string;
+  res_body_is_json_schema?: boolean;
+  switch_notice?: boolean;
+  api_opened?: boolean;
   desc: string;
   markdown: string;
+  message?: string;
   // 其他可能的字段...
 }
 
@@ -36,13 +45,16 @@ export interface SaveApiInterfaceParams {
   req_body_type?: string; // 请求体类型，如json, form, file等
   req_body_form?: any[]; // 表单请求体
   req_body_other?: string; // JSON或其他类型请求体
+  req_body_is_json_schema?: boolean; // 请求体是否为JSON Schema
   res_body_type?: string; // 响应体类型，如json, raw
   res_body?: string;     // 响应数据，通常是JSON Schema格式
+  res_body_is_json_schema?: boolean; // 响应数据是否为JSON Schema
   desc?: string;         // 接口描述
   markdown?: string;     // markdown格式的接口文档
   switch_notice?: boolean; // 是否开启通知
   api_opened?: boolean;  // 接口是否公开
   tag?: string[];        // 标签
+  status?: string;       // 接口状态
 }
 
 // 项目信息

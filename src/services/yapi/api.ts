@@ -72,7 +72,13 @@ export class YApiService {
     return this.tokenMap.get(projectId) || this.defaultToken;
   }
 
-  private async request<T>(endpoint: string, params: Record<string, any> = {}, projectId?: string, method: 'GET' | 'POST' = 'GET'): Promise<T> {
+  private async request<T>(
+    endpoint: string,
+    params: Record<string, any> = {},
+    projectId?: string,
+    method: "GET" | "POST" = "GET",
+    options: { contentType?: "json" | "form" } = {},
+  ): Promise<T> {
     try {
       this.logger.debug(`调用 ${this.baseUrl}${endpoint} 方法: ${method}`);
       
@@ -93,10 +99,25 @@ export class YApiService {
           }
         });
       } else {
-        response = await axios.post(`${this.baseUrl}${endpoint}`, {
+        const contentType = options.contentType || "json";
+        const body = {
           ...params,
-          token: token
-        });
+          token: token,
+        };
+        if (contentType === "form") {
+          const form = new URLSearchParams();
+          for (const [key, value] of Object.entries(body)) {
+            if (value === undefined || value === null) continue;
+            if (typeof value === "string") form.set(key, value);
+            else if (typeof value === "number" || typeof value === "boolean") form.set(key, String(value));
+            else form.set(key, JSON.stringify(value));
+          }
+          response = await axios.post(`${this.baseUrl}${endpoint}`, form, {
+            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+          });
+        } else {
+          response = await axios.post(`${this.baseUrl}${endpoint}`, body);
+        }
       }
 
       return response.data;
@@ -138,6 +159,25 @@ export class YApiService {
       this.logger.error(`获取项目分类列表失败, projectId=${projectId}:`, error);
       throw error;
     }
+  }
+
+  /**
+   * 新增接口分类（/api/interface/add_cat）
+   */
+  async addCategory(projectId: string, name: string, desc: string = ""): Promise<any> {
+    const response = await this.request<any>(
+      "/api/interface/add_cat",
+      { project_id: projectId, name, desc },
+      projectId,
+      "POST",
+      { contentType: "form" },
+    );
+    if (response?.errcode !== 0) {
+      throw new Error(response?.errmsg || "新增接口分类失败");
+    }
+    // 成功后清理缓存，避免读到旧数据
+    this.categoryListCache.delete(projectId);
+    return response.data;
   }
 
   /**
@@ -215,6 +255,17 @@ export class YApiService {
   }
 
   /**
+   * 获取接口菜单列表（/api/interface/list_menu）
+   */
+  async getInterfaceMenu(projectId: string): Promise<any[]> {
+    const response = await this.request<any>("/api/interface/list_menu", { project_id: projectId }, projectId);
+    if (response?.errcode !== 0) {
+      throw new Error(response?.errmsg || "获取接口菜单列表失败");
+    }
+    return response.data;
+  }
+
+  /**
    * 获取接口详情
    * @param projectId 项目ID
    * @param id 接口ID
@@ -265,6 +316,61 @@ export class YApiService {
       this.logger.error(`${params.id ? '更新' : '新增'}接口失败:`, error);
       throw error;
     }
+  }
+
+  /**
+   * 新增接口（/api/interface/add）
+   */
+  async addInterface(params: SaveApiInterfaceParams): Promise<SaveApiResponse> {
+    const response = await this.request<SaveApiResponse>("/api/interface/add", params, params.project_id, "POST");
+    if (response.errcode !== 0) {
+      throw new Error(response.errmsg || "新增接口失败");
+    }
+    return response;
+  }
+
+  /**
+   * 更新接口（/api/interface/up）
+   */
+  async updateInterface(params: SaveApiInterfaceParams): Promise<SaveApiResponse> {
+    const response = await this.request<SaveApiResponse>("/api/interface/up", params, params.project_id, "POST");
+    if (response.errcode !== 0) {
+      throw new Error(response.errmsg || "更新接口失败");
+    }
+    return response;
+  }
+
+  /**
+   * 新增或更新接口（/api/interface/save）
+   */
+  async saveInterfaceUnified(params: SaveApiInterfaceParams): Promise<any> {
+    const response = await this.request<any>("/api/interface/save", params, params.project_id, "POST");
+    if (response?.errcode !== 0) {
+      throw new Error(response?.errmsg || "保存接口失败");
+    }
+    return response;
+  }
+
+  /**
+   * 获取接口列表数据（/api/interface/list）
+   */
+  async listInterfaces(projectId: string, page: number = 1, limit: number = 10): Promise<any> {
+    const response = await this.request<any>("/api/interface/list", { project_id: projectId, page, limit }, projectId);
+    if (response?.errcode !== 0) {
+      throw new Error(response?.errmsg || "获取接口列表失败");
+    }
+    return response.data;
+  }
+
+  /**
+   * 服务端数据导入（/api/open/import_data）
+   */
+  async importData(projectId: string, params: { type: string; merge: string; json?: string; url?: string }): Promise<any> {
+    const response = await this.request<any>("/api/open/import_data", params, projectId, "POST", { contentType: "form" });
+    if (response?.errcode !== 0) {
+      throw new Error(response?.errmsg || "导入数据失败");
+    }
+    return response.data;
   }
 
   /**
@@ -463,14 +569,7 @@ export class YApiService {
    */
   async getCategoryApis(projectId: string, catId: string): Promise<Array<ApiSearchResultItem>> {
     try {
-      const params = {
-        project_id: projectId,
-        catid: catId,
-        page: 1,
-        limit: 100 // 默认获取100个，如果需要更多可以考虑分页
-      };
-      
-      const response = await this.request<ApiSearchResponse>("/api/interface/list_cat", params, projectId);
+      const response = await this.listCategoryInterfaces(projectId, catId, 1, 100);
       
       if (response.errcode !== 0) {
         throw new Error(response.errmsg || "获取分类接口列表失败");
@@ -481,5 +580,25 @@ export class YApiService {
       this.logger.error(`获取分类接口列表失败, projectId=${projectId}, catId=${catId}:`, error);
       throw error;
     }
+  }
+
+  /**
+   * 获取某个分类下接口列表（/api/interface/list_cat）
+   */
+  async listCategoryInterfaces(projectId: string, catId: string, page: number = 1, limit: number = 10): Promise<ApiSearchResponse> {
+    const params = {
+      project_id: projectId,
+      catid: catId,
+      page,
+      limit,
+    };
+
+    const response = await this.request<ApiSearchResponse>("/api/interface/list_cat", params, projectId);
+
+    if (response.errcode !== 0) {
+      throw new Error(response.errmsg || "获取分类接口列表失败");
+    }
+
+    return response;
   }
 } 
