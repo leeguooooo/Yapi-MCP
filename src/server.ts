@@ -9,6 +9,53 @@ import { YApiService } from "./services/yapi/api";
 import { ProjectInfoCache } from "./services/yapi/cache";
 import { Logger } from "./services/yapi/logger";
 
+type JsonLike = unknown;
+
+function normalizeJsonArrayInput(value: JsonLike, fieldName: string): { ok: true; value: any[] } | { ok: false; error: string } {
+  if (value === undefined || value === null) return { ok: true, value: [] };
+  if (Array.isArray(value)) return { ok: true, value };
+  if (typeof value === "string") {
+    try {
+      const parsed = JSON.parse(value);
+      if (!Array.isArray(parsed)) return { ok: false, error: `${fieldName} 需要是 JSON 数组` };
+      return { ok: true, value: parsed };
+    } catch (e) {
+      return { ok: false, error: `${fieldName} JSON 解析错误: ${e}` };
+    }
+  }
+  return { ok: false, error: `${fieldName} 需要是 JSON 数组或数组类型` };
+}
+
+function normalizeStringOrJson(value: JsonLike, fieldName: string): { ok: true; value: string } | { ok: false; error: string } {
+  if (value === undefined || value === null) return { ok: true, value: "" };
+  if (typeof value === "string") return { ok: true, value };
+  try {
+    return { ok: true, value: JSON.stringify(value, null, 2) };
+  } catch (e) {
+    return { ok: false, error: `${fieldName} 无法序列化为 JSON 字符串: ${e}` };
+  }
+}
+
+function normalizeTagInput(value: JsonLike): { ok: true; value: string[] } | { ok: false; error: string } {
+  if (value === undefined || value === null) return { ok: true, value: [] };
+  if (Array.isArray(value)) return { ok: true, value: value.map(String).filter(Boolean) };
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return { ok: true, value: [] };
+    if (trimmed.startsWith("[")) {
+      try {
+        const parsed = JSON.parse(trimmed);
+        if (!Array.isArray(parsed)) return { ok: false, error: "tag 需要是 JSON 数组" };
+        return { ok: true, value: parsed.map(String).filter(Boolean) };
+      } catch (e) {
+        return { ok: false, error: `tag JSON 解析错误: ${e}` };
+      }
+    }
+    return { ok: true, value: trimmed.split(/[\s,]+/).map(s => s.trim()).filter(Boolean) };
+  }
+  return { ok: false, error: "tag 需要是字符串或字符串数组" };
+}
+
 export class YapiMcpServer {
   private readonly server: McpServer;
   private readonly yapiService: YApiService;
@@ -102,6 +149,130 @@ export class YapiMcpServer {
   }
 
   private registerTools(): void {
+    const yapiParamItemSchema = z
+      .object({
+        name: z.string().describe("参数名"),
+        desc: z.string().optional().describe("中文备注/说明（建议把枚举、单位、范围等写清楚）"),
+        type: z.string().optional().describe("类型，如 string/number/boolean/integer/object/array"),
+        example: z.string().optional().describe("示例值"),
+        required: z.union([z.string(), z.number(), z.boolean()]).optional().describe("是否必填（YApi 常用 '1'/'0'）"),
+      })
+      .passthrough();
+
+    const yapiHeaderItemSchema = yapiParamItemSchema
+      .extend({
+        value: z.string().optional().describe("Header 值（如 application/json）"),
+      })
+      .passthrough();
+
+    const buildInterfaceSaveParams = async (input: {
+      projectId: string;
+      catid?: string;
+      id?: string;
+      title?: string;
+      path?: string;
+      method?: string;
+      status?: string;
+      tag?: unknown;
+      req_params?: unknown;
+      req_query?: unknown;
+      req_headers?: unknown;
+      req_body_type?: string;
+      req_body_form?: unknown;
+      req_body_other?: unknown;
+      req_body_is_json_schema?: boolean;
+      res_body_type?: string;
+      res_body?: unknown;
+      res_body_is_json_schema?: boolean;
+      switch_notice?: boolean;
+      api_opened?: boolean;
+      desc?: string;
+      markdown?: string;
+      message?: string;
+    }): Promise<{ ok: true; params: any; isUpdate: boolean } | { ok: false; error: string }> => {
+      const isUpdate = Boolean(input.id);
+      let current: any | null = null;
+
+      if (isUpdate) {
+        current = await this.yapiService.getApiInterface(input.projectId, input.id as string);
+      }
+
+      const finalCatid = input.catid ?? (current ? String((current as any).catid ?? "") : "");
+      const finalTitle = input.title ?? (current ? String((current as any).title ?? "") : "");
+      const finalPath = input.path ?? (current ? String((current as any).path ?? "") : "");
+      const finalMethod = input.method ?? (current ? String((current as any).method ?? "") : "");
+
+      if (!finalCatid) return { ok: false, error: "缺少 catid：新增必填；更新可省略但必须能从原接口读取到" };
+      if (!finalTitle) return { ok: false, error: "缺少 title：新增必填；更新可省略但必须能从原接口读取到" };
+      if (!finalPath) return { ok: false, error: "缺少 path：新增必填；更新可省略但必须能从原接口读取到" };
+      if (!finalMethod) return { ok: false, error: "缺少 method：新增必填；更新可省略但必须能从原接口读取到" };
+
+      const params: any = {
+        project_id: input.projectId,
+        catid: finalCatid,
+        title: finalTitle,
+        path: finalPath,
+        method: finalMethod,
+      };
+
+      if (isUpdate) params.id = input.id;
+
+      const tagRaw = input.tag !== undefined ? input.tag : isUpdate ? (current as any)?.tag : undefined;
+      const tagResult = normalizeTagInput(tagRaw);
+      if (!tagResult.ok) return { ok: false, error: tagResult.error };
+      params.tag = tagResult.value;
+
+      params.status = input.status ?? (isUpdate ? (current as any)?.status : "undone");
+      params.desc = input.desc ?? (isUpdate ? (current as any)?.desc : "");
+      params.markdown = input.markdown ?? (isUpdate ? (current as any)?.markdown : "");
+      params.message = input.message ?? (isUpdate ? (current as any)?.message : "");
+
+      const reqParamsRaw = input.req_params !== undefined ? input.req_params : isUpdate ? (current as any)?.req_params : [];
+      const reqParamsParsed = normalizeJsonArrayInput(reqParamsRaw, "req_params");
+      if (!reqParamsParsed.ok) return { ok: false, error: reqParamsParsed.error };
+      params.req_params = reqParamsParsed.value;
+
+      const reqQueryRaw = input.req_query !== undefined ? input.req_query : isUpdate ? (current as any)?.req_query : [];
+      const reqQueryParsed = normalizeJsonArrayInput(reqQueryRaw, "req_query");
+      if (!reqQueryParsed.ok) return { ok: false, error: reqQueryParsed.error };
+      params.req_query = reqQueryParsed.value;
+
+      const reqHeadersRaw = input.req_headers !== undefined ? input.req_headers : isUpdate ? (current as any)?.req_headers : [];
+      const reqHeadersParsed = normalizeJsonArrayInput(reqHeadersRaw, "req_headers");
+      if (!reqHeadersParsed.ok) return { ok: false, error: reqHeadersParsed.error };
+      params.req_headers = reqHeadersParsed.value;
+
+      params.req_body_type = input.req_body_type ?? (isUpdate ? (current as any)?.req_body_type : "");
+
+      const reqBodyFormRaw = input.req_body_form !== undefined ? input.req_body_form : isUpdate ? (current as any)?.req_body_form : [];
+      const reqBodyFormParsed = normalizeJsonArrayInput(reqBodyFormRaw, "req_body_form");
+      if (!reqBodyFormParsed.ok) return { ok: false, error: reqBodyFormParsed.error };
+      params.req_body_form = reqBodyFormParsed.value;
+
+      const reqBodyOtherRaw = input.req_body_other !== undefined ? input.req_body_other : isUpdate ? (current as any)?.req_body_other : "";
+      const reqBodyOtherNormalized = normalizeStringOrJson(reqBodyOtherRaw, "req_body_other");
+      if (!reqBodyOtherNormalized.ok) return { ok: false, error: reqBodyOtherNormalized.error };
+      params.req_body_other = reqBodyOtherNormalized.value;
+
+      params.req_body_is_json_schema =
+        input.req_body_is_json_schema ?? (isUpdate ? (current as any)?.req_body_is_json_schema : undefined);
+
+      params.res_body_type = input.res_body_type ?? (isUpdate ? (current as any)?.res_body_type : "json");
+
+      const resBodyRaw = input.res_body !== undefined ? input.res_body : isUpdate ? (current as any)?.res_body : "";
+      const resBodyNormalized = normalizeStringOrJson(resBodyRaw, "res_body");
+      if (!resBodyNormalized.ok) return { ok: false, error: resBodyNormalized.error };
+      params.res_body = resBodyNormalized.value;
+
+      params.res_body_is_json_schema =
+        input.res_body_is_json_schema ?? (isUpdate ? (current as any)?.res_body_is_json_schema : undefined);
+
+      params.switch_notice = input.switch_notice ?? (isUpdate ? (current as any)?.switch_notice : undefined);
+      params.api_opened = input.api_opened ?? (isUpdate ? (current as any)?.api_opened : undefined);
+
+      return { ok: true, params, isUpdate };
+    };
+
     // 获取API接口详情
     this.server.tool(
       "yapi_get_api_desc",
@@ -139,6 +310,11 @@ export class YapiMcpServer {
             },
             其他信息: {
               接口文档: apiInterface.markdown
+            },
+            编辑建议: {
+              优先更新字段: "req_params / req_query / req_headers / req_body_* / res_body（把枚举值、中文备注、示例尽量放在这些结构字段里）",
+              避免滥用字段: "desc 只写简要概述；长文档写 markdown；不要用 desc 替代结构化字段",
+              对应开放API工具: "需要原始字段或精确对应开放 API 时，用 yapi_interface_* / yapi_open_import_data / yapi_project_get"
             }
           };
 
@@ -154,33 +330,83 @@ export class YapiMcpServer {
       }
     );
 
+    // 获取项目详情（/api/project/get）
+    this.server.tool(
+      "yapi_project_get",
+      "获取 YApi 项目详情（对应 /api/project/get）",
+      {
+        projectId: z.string().describe("YApi项目ID"),
+      },
+      async ({ projectId }) => {
+        try {
+          const projectInfo = await this.yapiService.getProjectInfo(projectId);
+          return { content: [{ type: "text", text: JSON.stringify(projectInfo, null, 2) }] };
+        } catch (error) {
+          this.logger.error(`获取项目详情失败:`, error);
+          return { content: [{ type: "text", text: `获取项目详情失败: ${error}` }] };
+        }
+      },
+    );
+
+    // 获取接口数据（/api/interface/get）
+    this.server.tool(
+      "yapi_interface_get",
+      "获取接口数据（对应 /api/interface/get，返回原始字段）",
+      {
+        projectId: z.string().describe("YApi项目ID（用于选择 token）"),
+        apiId: z.string().describe("接口ID"),
+      },
+      async ({ projectId, apiId }) => {
+        try {
+          const apiInterface = await this.yapiService.getApiInterface(projectId, apiId);
+          return { content: [{ type: "text", text: JSON.stringify(apiInterface, null, 2) }] };
+        } catch (error) {
+          this.logger.error(`获取接口数据失败:`, error);
+          return { content: [{ type: "text", text: `获取接口数据失败: ${error}` }] };
+        }
+      },
+    );
+
     // 保存API接口
     this.server.tool(
       "yapi_save_api",
       "新增或更新YApi中的接口信息",
       {
         projectId: z.string().describe("YApi项目ID"),
-        catid: z.string().describe("接口分类ID，新增接口时必填"),
+        catid: z.string().optional().describe("接口分类ID；新增接口时必填，更新时可省略（会保留原值）"),
         id: z.string().optional().describe("接口ID，更新时必填，新增时不需要"),
-        title: z.string().describe("接口标题"),
-        path: z.string().describe("接口路径，如：/api/user"),
-        method: z.string().describe("请求方法，如：GET, POST, PUT, DELETE等"),
-        status: z.string().optional().describe("接口状态，done代表完成，undone代表未完成"),
-        tag: z.string().optional().describe("接口标签列表"),
-        req_params: z.string().optional().describe("路径参数，JSON格式数组，如：[{\"name\":\"id\",\"desc\":\"用户ID\"}]"),
-        req_query: z.string().optional().describe("查询参数，JSON格式数组，如：[{\"name\":\"page\",\"desc\":\"页码\",\"required\":\"1\"}]"),
-        req_headers: z.string().optional().describe("请求头参数，JSON格式数组，如：[{\"name\":\"Content-Type\",\"value\":\"application/json\"}]"),
-        req_body_type: z.string().optional().describe("请求体类型，如：form, json, file, raw"),
-        req_body_form: z.string().optional().describe("表单请求体，JSON格式数组"),
-        req_body_other: z.string().optional().describe("其他请求体（通常是JSON格式）"),
+        title: z.string().optional().describe("接口标题；新增接口时必填，更新时可省略（会保留原值）"),
+        path: z.string().optional().describe("接口路径，如：/api/user；新增接口时必填，更新时可省略（会保留原值）"),
+        method: z.string().optional().describe("请求方法，如：GET, POST, PUT, DELETE等；新增接口时必填，更新时可省略（会保留原值）"),
+        status: z.string().optional().describe("接口状态，done代表完成，undone代表未完成；更新时可省略（不覆盖原值）"),
+        tag: z.union([z.string(), z.array(z.string())]).optional().describe("接口标签列表；支持 JSON 数组字符串或字符串数组；更新时可省略（不覆盖原值）"),
+        req_params: z
+          .union([z.string(), z.array(yapiParamItemSchema)])
+          .optional()
+          .describe("路径参数；强烈建议填写（枚举值/中文备注放这里）；支持 JSON 数组字符串或数组"),
+        req_query: z
+          .union([z.string(), z.array(yapiParamItemSchema)])
+          .optional()
+          .describe("查询参数；支持 JSON 数组字符串或数组"),
+        req_headers: z
+          .union([z.string(), z.array(yapiHeaderItemSchema)])
+          .optional()
+          .describe("请求头参数；支持 JSON 数组字符串或数组"),
+        req_body_type: z.string().optional().describe("请求体类型（常见：raw/form/json/file）"),
+        req_body_form: z
+          .union([z.string(), z.array(yapiParamItemSchema)])
+          .optional()
+          .describe("表单请求体；支持 JSON 数组字符串或数组"),
+        req_body_other: z.union([z.string(), z.record(z.any()), z.array(z.any())]).optional().describe("其他请求体（通常是 JSON / JSON Schema）；支持字符串或对象/数组"),
         req_body_is_json_schema: z.boolean().optional().describe("是否开启JSON Schema，默认false"),
-        res_body_type: z.string().optional().describe("返回数据类型，如：json, raw"),
-        res_body: z.string().optional().describe("返回数据，如果res_body_is_json_schema为true则用json schema格式"),
+        res_body_type: z.string().optional().describe("返回数据类型（常见：json/raw）"),
+        res_body: z.union([z.string(), z.record(z.any()), z.array(z.any())]).optional().describe("返回数据；强烈建议填写（枚举值/中文备注放这里）；支持字符串或对象/数组（会自动序列化）"),
         res_body_is_json_schema: z.boolean().optional().describe("返回数据是否为JSON Schema，默认false"),
         switch_notice: z.boolean().optional().describe("开启接口运行通知，默认true"),
         api_opened: z.boolean().optional().describe("开启API文档页面，默认true"),
-        desc: z.string().optional().describe("接口描述"),
-        markdown: z.string().optional().describe("markdown格式的接口描述")
+        message: z.string().optional().describe("接口备注信息（对应 openapi 示例中的 message 字段）"),
+        desc: z.string().optional().describe("接口简要描述（不要把请求/响应结构都塞进 desc；结构请写到 req_* / res_body）"),
+        markdown: z.string().optional().describe("markdown格式的接口描述（补充说明/示例；结构仍建议写到 req_* / res_body）")
       },
       async ({
         projectId,
@@ -203,110 +429,50 @@ export class YapiMcpServer {
         res_body_is_json_schema,
         switch_notice,
         api_opened,
+        message,
         desc,
         markdown
       }) => {
         try {
-          // 准备接口参数
-          const params = {
-            project_id: projectId,
+          const built = await buildInterfaceSaveParams({
+            projectId,
             catid,
+            id,
             title,
             path,
             method,
-            status: status || 'undone',
-            tag: tag ? JSON.parse(tag) : [],
-            desc: desc || "",
-            markdown: markdown || ""
-          } as any;
+            status,
+            tag,
+            req_params,
+            req_query,
+            req_headers,
+            req_body_type,
+            req_body_form,
+            req_body_other,
+            req_body_is_json_schema,
+            res_body_type,
+            res_body,
+            res_body_is_json_schema,
+            switch_notice,
+            api_opened,
+            desc,
+            markdown,
+            message,
+          });
 
-          // 有ID则是更新，否则是新增
-          if (id) {
-            params.id = id;
-          }
-
-          // 处理可选参数，将字符串JSON转为对象
-          if (req_params) {
-            try {
-              params.req_params = JSON.parse(req_params);
-            } catch (e) {
-              return {
-                content: [{ type: "text", text: `路径参数JSON解析错误: ${e}` }],
-              };
-            }
-          }
-
-          if (req_query) {
-            try {
-              params.req_query = JSON.parse(req_query);
-            } catch (e) {
-              return {
-                content: [{ type: "text", text: `查询参数JSON解析错误: ${e}` }],
-              };
-            }
-          }
-
-          if (req_headers) {
-            try {
-              params.req_headers = JSON.parse(req_headers);
-            } catch (e) {
-              return {
-                content: [{ type: "text", text: `请求头参数JSON解析错误: ${e}` }],
-              };
-            }
-          }
-
-          if (req_body_type) {
-            params.req_body_type = req_body_type;
-          }
-
-          if (req_body_form) {
-            try {
-              params.req_body_form = JSON.parse(req_body_form);
-            } catch (e) {
-              return {
-                content: [{ type: "text", text: `表单请求体JSON解析错误: ${e}` }],
-              };
-            }
-          }
-
-          if (req_body_other) {
-            params.req_body_other = req_body_other;
-          }
-
-          if (req_body_is_json_schema !== undefined) {
-            params.req_body_is_json_schema = req_body_is_json_schema;
-          }
-
-          if (res_body_type) {
-            params.res_body_type = res_body_type;
-          }
-
-          if (res_body) {
-            params.res_body = res_body;
-          }
-
-          if (res_body_is_json_schema !== undefined) {
-            params.res_body_is_json_schema = res_body_is_json_schema;
-          }
-
-          if (switch_notice !== undefined) {
-            params.switch_notice = switch_notice;
-          }
-
-          if (api_opened !== undefined) {
-            params.api_opened = api_opened;
+          if (!built.ok) {
+            return { content: [{ type: "text", text: built.error }] };
           }
 
           // 调用API保存接口
-          const response = await this.yapiService.saveInterface(params);
+          const response = await this.yapiService.saveInterface(built.params);
 
           // 返回保存结果
           const resultApiId = response.data._id;
           return {
             content: [{ 
               type: "text", 
-              text: `接口${id ? '更新' : '新增'}成功！\n接口ID: ${resultApiId}\n接口名称: ${title}\n请求方法: ${method}\n接口路径: ${path}` 
+              text: `接口${id ? '更新' : '新增'}成功！\n接口ID: ${resultApiId}\n接口名称: ${built.params.title}\n请求方法: ${built.params.method}\n接口路径: ${built.params.path}` 
             }],
           };
         } catch (error) {
@@ -316,6 +482,256 @@ export class YapiMcpServer {
           };
         }
       }
+    );
+
+    // 新增接口分类（/api/interface/add_cat）
+    this.server.tool(
+      "yapi_interface_add_cat",
+      "新增接口分类（对应 /api/interface/add_cat）",
+      {
+        projectId: z.string().describe("YApi项目ID"),
+        name: z.string().describe("分类名称"),
+        desc: z.string().optional().describe("分类描述"),
+      },
+      async ({ projectId, name, desc }) => {
+        try {
+          const data = await this.yapiService.addCategory(projectId, name, desc || "");
+          return { content: [{ type: "text", text: `新增分类成功：\n${JSON.stringify(data, null, 2)}` }] };
+        } catch (error) {
+          this.logger.error(`新增接口分类失败:`, error);
+          return { content: [{ type: "text", text: `新增接口分类失败: ${error}` }] };
+        }
+      },
+    );
+
+    // 获取菜单列表（/api/interface/getCatMenu）
+    this.server.tool(
+      "yapi_interface_get_cat_menu",
+      "获取菜单列表（对应 /api/interface/getCatMenu）",
+      {
+        projectId: z.string().describe("YApi项目ID"),
+      },
+      async ({ projectId }) => {
+        try {
+          const list = await this.yapiService.getCategoryList(projectId);
+          return { content: [{ type: "text", text: JSON.stringify(list, null, 2) }] };
+        } catch (error) {
+          this.logger.error(`获取菜单列表失败:`, error);
+          return { content: [{ type: "text", text: `获取菜单列表失败: ${error}` }] };
+        }
+      },
+    );
+
+    // 获取接口列表数据（/api/interface/list）
+    this.server.tool(
+      "yapi_interface_list",
+      "获取接口列表数据（对应 /api/interface/list）",
+      {
+        projectId: z.string().describe("YApi项目ID"),
+        page: z.number().optional().describe("页码，默认 1"),
+        limit: z.number().optional().describe("每页数量，默认 10"),
+      },
+      async ({ projectId, page, limit }) => {
+        try {
+          const data = await this.yapiService.listInterfaces(projectId, page ?? 1, limit ?? 10);
+          return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+        } catch (error) {
+          this.logger.error(`获取接口列表失败:`, error);
+          return { content: [{ type: "text", text: `获取接口列表失败: ${error}` }] };
+        }
+      },
+    );
+
+    // 获取某个分类下接口列表（/api/interface/list_cat）
+    this.server.tool(
+      "yapi_interface_list_cat",
+      "获取某个分类下接口列表（对应 /api/interface/list_cat）",
+      {
+        projectId: z.string().describe("YApi项目ID"),
+        catId: z.string().describe("分类ID"),
+        page: z.number().optional().describe("页码，默认 1"),
+        limit: z.number().optional().describe("每页数量，默认 10"),
+      },
+      async ({ projectId, catId, page, limit }) => {
+        try {
+          const response = await this.yapiService.listCategoryInterfaces(projectId, catId, page ?? 1, limit ?? 10);
+          return { content: [{ type: "text", text: JSON.stringify(response.data, null, 2) }] };
+        } catch (error) {
+          this.logger.error(`获取分类接口列表失败:`, error);
+          return { content: [{ type: "text", text: `获取分类接口列表失败: ${error}` }] };
+        }
+      },
+    );
+
+    // 获取接口菜单列表（/api/interface/list_menu）
+    this.server.tool(
+      "yapi_interface_list_menu",
+      "获取接口菜单列表（对应 /api/interface/list_menu）",
+      {
+        projectId: z.string().describe("YApi项目ID"),
+      },
+      async ({ projectId }) => {
+        try {
+          const data = await this.yapiService.getInterfaceMenu(projectId);
+          return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+        } catch (error) {
+          this.logger.error(`获取接口菜单列表失败:`, error);
+          return { content: [{ type: "text", text: `获取接口菜单列表失败: ${error}` }] };
+        }
+      },
+    );
+
+    // 新增接口（/api/interface/add）
+    this.server.tool(
+      "yapi_interface_add",
+      "新增接口（对应 /api/interface/add）",
+      {
+        projectId: z.string().describe("YApi项目ID"),
+        catid: z.string().describe("接口分类ID"),
+        title: z.string().describe("接口标题"),
+        path: z.string().describe("接口路径"),
+        method: z.string().describe("请求方法"),
+        status: z.string().optional().describe("接口状态，默认 undone"),
+        tag: z.union([z.string(), z.array(z.string())]).optional().describe("标签"),
+        req_params: z.union([z.string(), z.array(yapiParamItemSchema)]).optional().describe("路径参数"),
+        req_query: z.union([z.string(), z.array(yapiParamItemSchema)]).optional().describe("查询参数"),
+        req_headers: z.union([z.string(), z.array(yapiHeaderItemSchema)]).optional().describe("请求头"),
+        req_body_type: z.string().optional().describe("请求体类型"),
+        req_body_form: z.union([z.string(), z.array(yapiParamItemSchema)]).optional().describe("表单请求体"),
+        req_body_other: z.union([z.string(), z.record(z.any()), z.array(z.any())]).optional().describe("其他请求体"),
+        req_body_is_json_schema: z.boolean().optional().describe("请求体是否 JSON Schema"),
+        res_body_type: z.string().optional().describe("响应类型，默认 json"),
+        res_body: z.union([z.string(), z.record(z.any()), z.array(z.any())]).optional().describe("响应内容"),
+        res_body_is_json_schema: z.boolean().optional().describe("响应是否 JSON Schema"),
+        switch_notice: z.boolean().optional().describe("是否通知"),
+        api_opened: z.boolean().optional().describe("是否公开"),
+        message: z.string().optional().describe("接口备注信息"),
+        desc: z.string().optional().describe("接口描述"),
+        markdown: z.string().optional().describe("markdown 描述"),
+      },
+      async (input) => {
+        try {
+          const built = await buildInterfaceSaveParams({ ...input, id: undefined });
+          if (!built.ok) return { content: [{ type: "text", text: built.error }] };
+          const response = await this.yapiService.addInterface(built.params);
+          return { content: [{ type: "text", text: JSON.stringify(response, null, 2) }] };
+        } catch (error) {
+          this.logger.error(`新增接口失败:`, error);
+          return { content: [{ type: "text", text: `新增接口失败: ${error}` }] };
+        }
+      },
+    );
+
+    // 更新接口（/api/interface/up）
+    this.server.tool(
+      "yapi_interface_up",
+      "更新接口（对应 /api/interface/up）",
+      {
+        projectId: z.string().describe("YApi项目ID"),
+        id: z.string().describe("接口ID"),
+        catid: z.string().optional().describe("分类ID（可省略，会保留原值）"),
+        title: z.string().optional().describe("接口标题（可省略，会保留原值）"),
+        path: z.string().optional().describe("接口路径（可省略，会保留原值）"),
+        method: z.string().optional().describe("请求方法（可省略，会保留原值）"),
+        status: z.string().optional().describe("接口状态"),
+        tag: z.union([z.string(), z.array(z.string())]).optional().describe("标签"),
+        req_params: z.union([z.string(), z.array(yapiParamItemSchema)]).optional().describe("路径参数"),
+        req_query: z.union([z.string(), z.array(yapiParamItemSchema)]).optional().describe("查询参数"),
+        req_headers: z.union([z.string(), z.array(yapiHeaderItemSchema)]).optional().describe("请求头"),
+        req_body_type: z.string().optional().describe("请求体类型"),
+        req_body_form: z.union([z.string(), z.array(yapiParamItemSchema)]).optional().describe("表单请求体"),
+        req_body_other: z.union([z.string(), z.record(z.any()), z.array(z.any())]).optional().describe("其他请求体"),
+        req_body_is_json_schema: z.boolean().optional().describe("请求体是否 JSON Schema"),
+        res_body_type: z.string().optional().describe("响应类型"),
+        res_body: z.union([z.string(), z.record(z.any()), z.array(z.any())]).optional().describe("响应内容"),
+        res_body_is_json_schema: z.boolean().optional().describe("响应是否 JSON Schema"),
+        switch_notice: z.boolean().optional().describe("是否通知"),
+        api_opened: z.boolean().optional().describe("是否公开"),
+        message: z.string().optional().describe("接口备注信息"),
+        desc: z.string().optional().describe("接口描述"),
+        markdown: z.string().optional().describe("markdown 描述"),
+      },
+      async (input) => {
+        try {
+          const built = await buildInterfaceSaveParams(input);
+          if (!built.ok) return { content: [{ type: "text", text: built.error }] };
+          const response = await this.yapiService.updateInterface(built.params);
+          return { content: [{ type: "text", text: JSON.stringify(response, null, 2) }] };
+        } catch (error) {
+          this.logger.error(`更新接口失败:`, error);
+          return { content: [{ type: "text", text: `更新接口失败: ${error}` }] };
+        }
+      },
+    );
+
+    // 新增或者更新接口（/api/interface/save）
+    this.server.tool(
+      "yapi_interface_save",
+      "新增或者更新接口（对应 /api/interface/save）",
+      {
+        projectId: z.string().describe("YApi项目ID"),
+        id: z.string().optional().describe("接口ID（有则更新，无则新增）"),
+        catid: z.string().optional().describe("接口分类ID"),
+        title: z.string().optional().describe("接口标题"),
+        path: z.string().optional().describe("接口路径"),
+        method: z.string().optional().describe("请求方法"),
+        status: z.string().optional().describe("接口状态"),
+        tag: z.union([z.string(), z.array(z.string())]).optional().describe("标签"),
+        req_params: z.union([z.string(), z.array(yapiParamItemSchema)]).optional().describe("路径参数"),
+        req_query: z.union([z.string(), z.array(yapiParamItemSchema)]).optional().describe("查询参数"),
+        req_headers: z.union([z.string(), z.array(yapiHeaderItemSchema)]).optional().describe("请求头"),
+        req_body_type: z.string().optional().describe("请求体类型"),
+        req_body_form: z.union([z.string(), z.array(yapiParamItemSchema)]).optional().describe("表单请求体"),
+        req_body_other: z.union([z.string(), z.record(z.any()), z.array(z.any())]).optional().describe("其他请求体"),
+        req_body_is_json_schema: z.boolean().optional().describe("请求体是否 JSON Schema"),
+        res_body_type: z.string().optional().describe("响应类型"),
+        res_body: z.union([z.string(), z.record(z.any()), z.array(z.any())]).optional().describe("响应内容"),
+        res_body_is_json_schema: z.boolean().optional().describe("响应是否 JSON Schema"),
+        switch_notice: z.boolean().optional().describe("是否通知"),
+        api_opened: z.boolean().optional().describe("是否公开"),
+        message: z.string().optional().describe("接口备注信息"),
+        desc: z.string().optional().describe("接口描述"),
+        markdown: z.string().optional().describe("markdown 描述"),
+      },
+      async (input) => {
+        try {
+          const built = await buildInterfaceSaveParams(input);
+          if (!built.ok) return { content: [{ type: "text", text: built.error }] };
+          const response = await this.yapiService.saveInterfaceUnified(built.params);
+          return { content: [{ type: "text", text: JSON.stringify(response, null, 2) }] };
+        } catch (error) {
+          this.logger.error(`保存接口失败:`, error);
+          return { content: [{ type: "text", text: `保存接口失败: ${error}` }] };
+        }
+      },
+    );
+
+    // 服务端数据导入（/api/open/import_data）
+    this.server.tool(
+      "yapi_open_import_data",
+      "服务端数据导入（对应 /api/open/import_data）",
+      {
+        projectId: z.string().describe("YApi项目ID（用于选择 token）"),
+        type: z.string().describe("导入方式，如 swagger"),
+        merge: z.enum(["normal", "good", "merge"]).describe("同步模式：normal/good/merge"),
+        json: z.union([z.string(), z.record(z.any()), z.array(z.any())]).optional().describe("导入数据 JSON（会自动序列化为字符串）"),
+        url: z.string().optional().describe("导入数据 URL（提供后会走 url 方式）"),
+      },
+      async ({ projectId, type, merge, json, url }) => {
+        try {
+          let jsonString: string | undefined;
+          if (json !== undefined) {
+            const normalized = normalizeStringOrJson(json, "json");
+            if (!normalized.ok) return { content: [{ type: "text", text: normalized.error }] };
+            jsonString = normalized.value;
+          }
+          const data = await this.yapiService.importData(projectId, { type, merge, json: jsonString, url });
+          return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+        } catch (error) {
+          this.logger.error(`导入数据失败:`, error);
+          return { content: [{ type: "text", text: `导入数据失败: ${error}` }] };
+        }
+      },
     );
 
     // 搜索API接口
@@ -482,20 +898,20 @@ export class YapiMcpServer {
       "yapi_get_categories",
       "获取YApi项目下的接口分类列表，以及每个分类下的接口信息",
       {
-        projectId: z.string().describe("YApi项目ID")
+        projectId: z.string().describe("YApi项目ID"),
+        includeApis: z.boolean().optional().describe("是否包含分类下接口列表，默认 true"),
+        limitPerCategory: z.number().optional().describe("每个分类最多返回多少接口（默认 100）")
       },
-      async ({ projectId }) => {
+      async ({ projectId, includeApis, limitPerCategory }) => {
         try {
-          // 获取项目信息
-          const projectInfo = this.yapiService.getProjectInfoCache().get(projectId);
-          if (!projectInfo) {
-            return {
-              content: [{ type: "text", text: `未找到项目ID为 ${projectId} 的项目信息，请确认项目ID正确` }],
-            };
-          }
+          const shouldIncludeApis = includeApis ?? true;
+          const perCatLimit = limitPerCategory ?? 100;
 
-          // 获取项目下的分类列表
-          const categoryList = this.yapiService.getCategoryListCache().get(projectId);
+          // 获取项目信息（必要时从 API 拉取）
+          const projectInfo = await this.yapiService.getProjectInfo(projectId);
+
+          // 获取项目下的分类列表（必要时从 API 拉取）
+          const categoryList = await this.yapiService.getCategoryList(projectId);
 
           if (!categoryList || categoryList.length === 0) {
             return {
@@ -503,11 +919,34 @@ export class YapiMcpServer {
             };
           }
 
+          if (!shouldIncludeApis) {
+            const simplified = categoryList.map(cat => ({
+              分类ID: cat._id,
+              分类名称: cat.name,
+              分类描述: cat.desc || "无描述",
+              创建时间: new Date(cat.add_time).toLocaleString(),
+              更新时间: new Date(cat.up_time).toLocaleString(),
+            }));
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `项目 "${projectInfo.name}" (ID: ${projectId}) 下共有 ${categoryList.length} 个接口分类:\n\n${JSON.stringify(
+                    simplified,
+                    null,
+                    2,
+                  )}`,
+                },
+              ],
+            };
+          }
+
           // 构建包含接口列表的分类信息
           const categoriesWithApisPromises = categoryList.map(async (cat) => {
             // 获取分类下的接口列表
             try {
-              const apis = await this.yapiService.getCategoryApis(projectId, cat._id);
+              const apisResponse = await this.yapiService.listCategoryInterfaces(projectId, cat._id, 1, perCatLimit);
+              const apis = apisResponse.data.list;
 
               // 将接口信息简化为所需字段
               const simplifiedApis = apis?.map(api => ({
