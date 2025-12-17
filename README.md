@@ -103,9 +103,9 @@ Yapi Auto MCP Server 是一个基于 [Model Context Protocol](https://modelconte
 }
 ```
 
-启动后先在对话里调用一次 `yapi_update_token`，会把 `projectId -> token` 缓存到本地 `~/.yapi-mcp/auth-*.json`。部分 YApi 部署不会在开放 API 中直接返回 token，本项目会自动兜底从项目设置页抓取 token。
+启动后先在对话里调用一次 `yapi_update_token`，会把 `projectId -> token` 缓存到本地 `~/.yapi-mcp/auth-*.json`，并把项目信息缓存到 `~/.yapi-mcp/project-info-*.json`。这些文件包含登录态和项目 token（已尽量使用 `0600` 权限落盘），请不要提交到仓库或分享给他人。部分 YApi 部署不会在开放 API 中直接返回 token，本项目会自动兜底从项目设置页抓取 token。
 
-提示：stdio 模式下为了加快 MCP 启动（避免超时），本项目不会在启动阶段做任何“全量缓存预热请求”。如需更快的工具响应，建议先调用一次 `yapi_update_token`。
+提示：stdio 模式下为了加快 MCP 启动（避免超时），本项目不会在启动阶段做任何“全量缓存预热请求”。如需更快的工具响应，建议先调用一次 `yapi_update_token`。如 MCP 客户端仍提示启动超时，可在客户端配置中提高 `startup_timeout_sec`。
 
 ## 安装配置
 
@@ -151,7 +151,8 @@ Yapi Auto MCP Server 是一个基于 [Model Context Protocol](https://modelconte
         "YAPI_TOKEN": "projectId:token1,projectId2:token2",
         "YAPI_AUTH_MODE": "token",
         "YAPI_CACHE_TTL": "10",
-        "YAPI_LOG_LEVEL": "info"
+        "YAPI_LOG_LEVEL": "info",
+        "YAPI_HTTP_TIMEOUT_MS": "15000"
       }
     }
   }
@@ -170,7 +171,8 @@ Yapi Auto MCP Server 是一个基于 [Model Context Protocol](https://modelconte
         "YAPI_BASE_URL": "https://yapi.example.com",
         "YAPI_AUTH_MODE": "global",
         "YAPI_EMAIL": "your_email@example.com",
-        "YAPI_PASSWORD": "your_password"
+        "YAPI_PASSWORD": "your_password",
+        "YAPI_HTTP_TIMEOUT_MS": "15000"
       }
     }
   }
@@ -202,6 +204,7 @@ PORT=3388
 # 可选配置
 YAPI_CACHE_TTL=10
 YAPI_LOG_LEVEL=info
+YAPI_HTTP_TIMEOUT_MS=15000
 ```
 
 3. **启动服务**：

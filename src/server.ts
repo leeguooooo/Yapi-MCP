@@ -5,6 +5,7 @@ import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { IncomingMessage, ServerResponse } from "http";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 
+import packageJson from "../package.json";
 import { YApiService } from "./services/yapi/api";
 import { ProjectInfoCache } from "./services/yapi/cache";
 import { Logger } from "./services/yapi/logger";
@@ -103,7 +104,7 @@ export class YapiMcpServer {
     
     this.server = new McpServer({
       name: "Yapi MCP Server",
-      version: "0.2.1",
+      version: String((packageJson as any)?.version ?? "0.0.0"),
     });
 
     this.registerTools();
