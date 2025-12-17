@@ -47,6 +47,9 @@ async function main() {
 
   const projectId = getArgValue("project-id") || process.env.YAPI_SMOKE_PROJECT_ID || "";
   const forceLogin = (getArgValue("force-login") || "").toLowerCase() === "true";
+  const searchProjectKeyword = getArgValue("search-project-keyword") || "";
+  const searchNameKeyword = getArgValue("search-name-keyword") || "";
+  const searchPathKeyword = getArgValue("search-path-keyword") || "";
 
   const env = {
     ...toEnvRecord(process.env),
@@ -83,6 +86,19 @@ async function main() {
     const list = await client.callTool({ name: "yapi_list_projects", arguments: {} });
     console.log("[smoke] yapi_list_projects:\n" + toText(list));
 
+    if (searchProjectKeyword || searchNameKeyword || searchPathKeyword) {
+      const search = await client.callTool({
+        name: "yapi_search_apis",
+        arguments: {
+          projectKeyword: searchProjectKeyword || undefined,
+          nameKeyword: searchNameKeyword || undefined,
+          pathKeyword: searchPathKeyword || undefined,
+          limit: 50,
+        },
+      });
+      console.log("[smoke] yapi_search_apis:\n" + toText(search));
+    }
+
     if (projectId) {
       const proj = await client.callTool({ name: "yapi_project_get", arguments: { projectId } });
       console.log(`[smoke] yapi_project_get(${projectId}):\n` + toText(proj));
@@ -96,4 +112,3 @@ main().catch((e) => {
   console.error("[smoke] failed:", e?.message || e);
   process.exit(1);
 });
-
