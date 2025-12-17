@@ -106,7 +106,25 @@ export class YapiMcpServer {
     });
 
     this.registerTools();
-    this.initializeCache();
+    // stdio 模式下 MCP client 需要快速完成握手；不要在启动阶段做任何网络请求/全量缓存预热
+    if (this.isStdioMode) {
+      this.loadCacheFromDiskOnly();
+    } else {
+      this.initializeCache();
+    }
+  }
+
+  private loadCacheFromDiskOnly(): void {
+    try {
+      const cachedProjectInfo = this.projectInfoCache.loadFromCache();
+      if (cachedProjectInfo.size === 0) return;
+      cachedProjectInfo.forEach((info, id) => {
+        this.yapiService.getProjectInfoCache().set(id, info);
+      });
+      this.logger.info(`stdio 模式：已从缓存加载 ${cachedProjectInfo.size} 个项目信息（未做预热请求）`);
+    } catch (e) {
+      this.logger.warn(`stdio 模式：读取缓存失败（忽略）：${e}`);
+    }
   }
 
   private async initializeCache(): Promise<void> {
@@ -116,9 +134,11 @@ export class YapiMcpServer {
         this.logger.info('缓存已过期，将异步更新缓存数据');
 
         // 异步加载最新的项目信息，不阻塞初始化过程
-        this.asyncUpdateCache().catch(error => {
-          this.logger.error('异步更新缓存失败:', error);
-        });
+        setTimeout(() => {
+          this.asyncUpdateCache().catch(error => {
+            this.logger.error('异步更新缓存失败:', error);
+          });
+        }, 0);
       } else {
         // 从缓存加载数据
         const cachedProjectInfo = this.projectInfoCache.loadFromCache();
@@ -134,18 +154,22 @@ export class YapiMcpServer {
         } else {
           // 缓存为空，异步更新
           this.logger.info('缓存为空，将异步更新缓存数据');
-          this.asyncUpdateCache().catch(error => {
-            this.logger.error('异步更新缓存失败:', error);
-          });
+          setTimeout(() => {
+            this.asyncUpdateCache().catch(error => {
+              this.logger.error('异步更新缓存失败:', error);
+            });
+          }, 0);
         }
       }
     } catch (error) {
       this.logger.error('加载或检查缓存时出错:', error);
 
       // 出错时也尝试异步更新缓存
-      this.asyncUpdateCache().catch(err => {
-        this.logger.error('异步更新缓存失败:', err);
-      });
+      setTimeout(() => {
+        this.asyncUpdateCache().catch(err => {
+          this.logger.error('异步更新缓存失败:', err);
+        });
+      }, 0);
     }
   }
 
