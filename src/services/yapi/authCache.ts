@@ -27,6 +27,51 @@ function hashBaseUrl(baseUrl: string): string {
   return crypto.createHash("sha256").update(baseUrl).digest("hex").slice(0, 16);
 }
 
+function ensureDirSecure(dirPath: string): void {
+  try {
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true, mode: 0o700 });
+    }
+    try {
+      fs.chmodSync(dirPath, 0o700);
+    } catch {
+      // best effort (e.g. on Windows)
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function writeFileAtomicSync(filePath: string, content: string, options: { mode: number }): void {
+  const dir = path.dirname(filePath);
+  const tmpPath = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`);
+  try {
+    fs.writeFileSync(tmpPath, content, { encoding: "utf8", mode: options.mode });
+    try {
+      fs.renameSync(tmpPath, filePath);
+    } catch (e) {
+      // Windows 上 rename 覆盖可能失败，退化为先删除再 rename
+      try {
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        fs.renameSync(tmpPath, filePath);
+      } catch {
+        throw e;
+      }
+    }
+    try {
+      fs.chmodSync(filePath, options.mode);
+    } catch {
+      // best effort
+    }
+  } finally {
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {
+      // ignore
+    }
+  }
+}
+
 export class YApiAuthCache {
   private readonly logger: Logger;
   private readonly baseUrl: string;
@@ -39,9 +84,7 @@ export class YApiAuthCache {
     this.cacheDir = path.join(os.homedir(), ".yapi-mcp");
     this.cacheFilePath = path.join(this.cacheDir, `auth-${hashBaseUrl(this.baseUrl)}.json`);
 
-    if (!fs.existsSync(this.cacheDir)) {
-      fs.mkdirSync(this.cacheDir, { recursive: true });
-    }
+    ensureDirSecure(this.cacheDir);
   }
 
   load(): YApiAuthCacheData {
@@ -70,7 +113,7 @@ export class YApiAuthCache {
 
   save(data: YApiAuthCacheData): void {
     try {
-      fs.writeFileSync(this.cacheFilePath, JSON.stringify(data, null, 2), "utf8");
+      writeFileAtomicSync(this.cacheFilePath, JSON.stringify(data, null, 2), { mode: 0o600 });
     } catch (e) {
       this.logger.warn(`写入全局鉴权缓存失败: ${e}`);
     }
@@ -108,4 +151,3 @@ export class YApiAuthCache {
     this.save(data);
   }
 }
-

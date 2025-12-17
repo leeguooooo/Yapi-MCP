@@ -76,7 +76,7 @@ export class YapiMcpServer {
   ) {
     this.logger = new Logger("YapiMCP", yapiLogLevel);
     this.yapiService = new YApiService(yapiBaseUrl, yapiToken, yapiLogLevel);
-    this.projectInfoCache = new ProjectInfoCache(yapiCacheTTL);
+    this.projectInfoCache = new ProjectInfoCache(yapiBaseUrl, yapiCacheTTL, yapiLogLevel);
     this.authMode = auth?.mode ?? (auth?.email && auth?.password ? "global" : "token");
     this.authService =
       this.authMode === "global" && auth?.email && auth?.password

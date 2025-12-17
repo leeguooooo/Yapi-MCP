@@ -1,5 +1,7 @@
 import * as fs from 'fs';
+import * as os from "os";
 import * as path from 'path';
+import crypto from "crypto";
 import { ProjectInfo } from './types';
 import { Logger } from './logger';
 
@@ -12,6 +14,54 @@ interface CacheData<T> {
   data: T;
 }
 
+function hashBaseUrl(baseUrl: string): string {
+  return crypto.createHash("sha256").update(baseUrl).digest("hex").slice(0, 16);
+}
+
+function ensureDirSecure(dirPath: string): void {
+  try {
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true, mode: 0o700 });
+    }
+    try {
+      fs.chmodSync(dirPath, 0o700);
+    } catch {
+      // best effort (e.g. on Windows)
+    }
+  } catch {
+    // ignore
+  }
+}
+
+function writeFileAtomicSync(filePath: string, content: string, options: { mode: number }): void {
+  const dir = path.dirname(filePath);
+  const tmpPath = path.join(dir, `.${path.basename(filePath)}.${process.pid}.${Date.now()}.tmp`);
+  try {
+    fs.writeFileSync(tmpPath, content, { encoding: "utf8", mode: options.mode });
+    try {
+      fs.renameSync(tmpPath, filePath);
+    } catch (e) {
+      try {
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+        fs.renameSync(tmpPath, filePath);
+      } catch {
+        throw e;
+      }
+    }
+    try {
+      fs.chmodSync(filePath, options.mode);
+    } catch {
+      // best effort
+    }
+  } finally {
+    try {
+      if (fs.existsSync(tmpPath)) fs.unlinkSync(tmpPath);
+    } catch {
+      // ignore
+    }
+  }
+}
+
 /**
  * 项目信息缓存管理器
  */
@@ -19,20 +69,44 @@ export class ProjectInfoCache {
   private readonly cacheFilePath: string;
   private readonly logger: Logger;
   private readonly cacheTTLMinutes: number;
+  private lastCacheMtimeMs: number | null = null;
+  private lastCacheData: CacheData<Record<string, ProjectInfo>> | null = null;
   
-  constructor(cacheTTLMinutes: number = 10) {
-    // 使用项目根目录来存储缓存文件
-    const projectRoot = path.resolve(__dirname, '../../..');
-    const cacheDir = path.join(projectRoot, '.yapi-cache');
-    
-    // 确保缓存目录存在
-    if (!fs.existsSync(cacheDir)) {
-      fs.mkdirSync(cacheDir, { recursive: true });
-    }
-    
-    this.cacheFilePath = path.join(cacheDir, 'project-info.json');
-    this.logger = new Logger('YApi Cache');
+  constructor(baseUrl: string, cacheTTLMinutes: number = 10, logLevel: string = "info") {
+    const normalizedBaseUrl = String(baseUrl || "").replace(/\/+$/, "");
+    const cacheDir = path.join(os.homedir(), ".yapi-mcp");
+    ensureDirSecure(cacheDir);
+
+    const suffix = normalizedBaseUrl ? `-${hashBaseUrl(normalizedBaseUrl)}` : "";
+    this.cacheFilePath = path.join(cacheDir, `project-info${suffix}.json`);
+    this.logger = new Logger("YApi Cache", logLevel);
     this.cacheTTLMinutes = cacheTTLMinutes;
+  }
+
+  private readCacheData(): CacheData<Record<string, ProjectInfo>> | null {
+    try {
+      if (!fs.existsSync(this.cacheFilePath)) {
+        this.lastCacheMtimeMs = null;
+        this.lastCacheData = null;
+        return null;
+      }
+      const stat = fs.statSync(this.cacheFilePath);
+      const mtimeMs = stat.mtimeMs;
+      if (this.lastCacheData && this.lastCacheMtimeMs === mtimeMs) return this.lastCacheData;
+
+      const cacheContent = fs.readFileSync(this.cacheFilePath, "utf8");
+      const parsed = JSON.parse(cacheContent) as CacheData<Record<string, ProjectInfo>>;
+      if (!parsed || !parsed.timestamp || !parsed.data) return null;
+
+      this.lastCacheMtimeMs = mtimeMs;
+      this.lastCacheData = parsed;
+      return parsed;
+    } catch (error) {
+      this.logger.error("读取项目信息缓存失败:", error);
+      this.lastCacheMtimeMs = null;
+      this.lastCacheData = null;
+      return null;
+    }
   }
   
   /**
@@ -42,6 +116,8 @@ export class ProjectInfoCache {
     try {
       if (fs.existsSync(this.cacheFilePath)) {
         fs.unlinkSync(this.cacheFilePath);
+        this.lastCacheMtimeMs = null;
+        this.lastCacheData = null;
         this.logger.info(`已清除YApi项目信息缓存: ${this.cacheFilePath}`);
       }
     } catch (error) {
@@ -69,11 +145,13 @@ export class ProjectInfoCache {
       };
       
       // 写入文件
-      fs.writeFileSync(
-        this.cacheFilePath, 
-        JSON.stringify(cacheData, null, 2),
-        'utf8'
-      );
+      writeFileAtomicSync(this.cacheFilePath, JSON.stringify(cacheData, null, 2), { mode: 0o600 });
+      this.lastCacheData = cacheData;
+      try {
+        this.lastCacheMtimeMs = fs.statSync(this.cacheFilePath).mtimeMs;
+      } catch {
+        this.lastCacheMtimeMs = null;
+      }
       
       this.logger.info(`项目信息已缓存到: ${this.cacheFilePath}`);
     } catch (error) {
@@ -87,14 +165,11 @@ export class ProjectInfoCache {
    */
   isCacheExpired(): boolean {
     try {
-      if (!fs.existsSync(this.cacheFilePath)) {
+      const cacheData = this.readCacheData();
+      if (!cacheData) {
         this.logger.debug('缓存文件不存在，视为已过期');
         return true;
       }
-      
-      // 读取缓存文件
-      const cacheContent = fs.readFileSync(this.cacheFilePath, 'utf8');
-      const cacheData = JSON.parse(cacheContent) as CacheData<any>;
       
       // 检查缓存数据结构
       if (!cacheData || !cacheData.timestamp) {
@@ -131,9 +206,8 @@ export class ProjectInfoCache {
     const projectInfoMap = new Map<string, ProjectInfo>();
     
     try {
-      if (fs.existsSync(this.cacheFilePath)) {
-        const cacheContent = fs.readFileSync(this.cacheFilePath, 'utf8');
-        const cacheData = JSON.parse(cacheContent) as CacheData<Record<string, ProjectInfo>>;
+      const cacheData = this.readCacheData();
+      if (cacheData) {
         
         // 检查缓存是否过期
         if (this.isCacheExpired()) {
