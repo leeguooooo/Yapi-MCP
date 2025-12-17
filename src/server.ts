@@ -88,6 +88,12 @@ export class YapiMcpServer {
       const cachedTokens = this.authService.loadCachedProjectTokens();
       this.yapiService.setProjectTokens(cachedTokens, { overwrite: false });
       this.logger.info(`全局模式已启用：已从本地缓存加载 ${cachedTokens.size} 个项目 token`);
+
+      const cachedCookie = this.authService.getCachedCookieHeader();
+      if (cachedCookie) {
+        this.yapiService.setCookieHeader(cachedCookie);
+        this.logger.info("全局模式已启用：已从本地缓存加载登录态 cookie");
+      }
     }
     // 判断是否为stdio模式
     this.isStdioMode = process.env.NODE_ENV === "cli" || process.argv.includes("--stdio");
@@ -315,8 +321,9 @@ export class YapiMcpServer {
             };
           }
 
-          const { tokens, groups, projects } = await this.authService.refreshProjectTokens({ forceLogin });
+          const { tokens, groups, projects, cookieHeader } = await this.authService.refreshProjectTokens({ forceLogin });
           this.yapiService.setProjectTokens(tokens, { overwrite: true });
+          this.yapiService.setCookieHeader(cookieHeader);
 
           // 刷新项目信息/分类缓存（可选，但有助于 list/search）
           await this.yapiService.loadAllProjectInfo();
@@ -327,7 +334,11 @@ export class YapiMcpServer {
             content: [
               {
                 type: "text",
-                text: `token 刷新完成：分组 ${groups.length} 个，项目 ${projects.length} 个，已缓存 token ${tokens.size} 个。`,
+                text: `token 刷新完成：分组 ${groups.length} 个，项目 ${projects.length} 个，已缓存 token ${tokens.size} 个。${
+                  tokens.size === 0
+                    ? "（提示：部分 YApi 部署不会在开放 API 返回 token，本工具已尝试从项目设置页抓取；如仍为 0，可能账号权限不足或实例限制展示 token。）"
+                    : ""
+                }`,
               },
             ],
           };
@@ -925,6 +936,36 @@ export class YapiMcpServer {
       {},
       async () => {
         try {
+          if (this.authService) {
+            const { projects } = await this.authService.listAccessibleProjects();
+            if (!projects.length) {
+              return {
+                content: [{ type: "text", text: "没有找到任何项目信息，请确认已登录且账号有权限访问项目" }],
+              };
+            }
+
+            const projectsList = projects.map(p => {
+              const id = String(p?._id ?? p?.id ?? "");
+              return {
+                项目ID: id,
+                项目名称: p?.name || p?.project_name || p?.title || "",
+                项目描述: p?.desc || "无描述",
+                基础路径: p?.basepath || "/",
+                项目分组ID: p?.group_id ?? p?.groupId ?? "",
+                已缓存Token: id ? (this.yapiService.hasProjectToken(id) ? "是" : "否") : "否",
+              };
+            });
+
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: `已发现 ${projectsList.length} 个可访问项目（全局模式）:\n\n${JSON.stringify(projectsList, null, 2)}`,
+                },
+              ],
+            };
+          }
+
           // 获取项目信息缓存
           const projectInfoCache = this.yapiService.getProjectInfoCache();
 
