@@ -105,6 +105,8 @@ Yapi Auto MCP Server 是一个基于 [Model Context Protocol](https://modelconte
 
 启动后先在对话里调用一次 `yapi_update_token`，会把 `projectId -> token` 缓存到本地 `~/.yapi-mcp/auth-*.json`。部分 YApi 部署不会在开放 API 中直接返回 token，本项目会自动兜底从项目设置页抓取 token。
 
+提示：stdio 模式下为了加快 MCP 启动（避免超时），本项目不会在启动阶段做任何“全量缓存预热请求”。如需更快的工具响应，建议先调用一次 `yapi_update_token`。
+
 ## 安装配置
 
 ### 方式一：npx 直接使用（推荐）
