@@ -77,13 +77,27 @@ export class YApiAuthService {
   private readonly password: string;
   private readonly logger: Logger;
   private readonly cache: YApiAuthCache;
+  private readonly httpTimeoutMs: number;
+  private readonly httpMaxContentLength: number;
+  private readonly httpMaxBodyLength: number;
+  private readonly httpMaxHtmlBytes: number;
 
-  constructor(baseUrl: string, email: string, password: string, logLevel: string = "info") {
+  constructor(
+    baseUrl: string,
+    email: string,
+    password: string,
+    logLevel: string = "info",
+    options: { timeoutMs?: number; maxContentLength?: number; maxBodyLength?: number; maxHtmlBytes?: number } = {},
+  ) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
     this.email = email;
     this.password = password;
     this.logger = new Logger("YApiAuthService", logLevel);
     this.cache = new YApiAuthCache(this.baseUrl, logLevel);
+    this.httpTimeoutMs = Number.isFinite(options.timeoutMs) ? Number(options.timeoutMs) : 15_000;
+    this.httpMaxContentLength = Number.isFinite(options.maxContentLength) ? Number(options.maxContentLength) : 10 * 1024 * 1024;
+    this.httpMaxBodyLength = Number.isFinite(options.maxBodyLength) ? Number(options.maxBodyLength) : 10 * 1024 * 1024;
+    this.httpMaxHtmlBytes = Number.isFinite(options.maxHtmlBytes) ? Number(options.maxHtmlBytes) : 2 * 1024 * 1024;
   }
 
   loadCachedProjectTokens(): Map<string, string> {
@@ -117,7 +131,12 @@ export class YApiAuthService {
       const response = await axios.post(
         `${this.baseUrl}/api/user/login`,
         { email: this.email, password: this.password },
-        { headers: { "Content-Type": "application/json;charset=UTF-8" } },
+        {
+          headers: { "Content-Type": "application/json;charset=UTF-8" },
+          timeout: this.httpTimeoutMs,
+          maxContentLength: this.httpMaxContentLength,
+          maxBodyLength: this.httpMaxBodyLength,
+        },
       );
 
       const setCookie = response.headers["set-cookie"] as string[] | undefined;
@@ -158,8 +177,20 @@ export class YApiAuthService {
       const headers: Record<string, string> = { Cookie: cookie, Accept: "application/json, text/plain, */*" };
       const res =
         method === "GET"
-          ? await axios.get(url, { params: options.params, headers })
-          : await axios.post(url, options.data ?? {}, { params: options.params, headers });
+          ? await axios.get(url, {
+              params: options.params,
+              headers,
+              timeout: this.httpTimeoutMs,
+              maxContentLength: this.httpMaxContentLength,
+              maxBodyLength: this.httpMaxBodyLength,
+            })
+          : await axios.post(url, options.data ?? {}, {
+              params: options.params,
+              headers,
+              timeout: this.httpTimeoutMs,
+              maxContentLength: this.httpMaxContentLength,
+              maxBodyLength: this.httpMaxBodyLength,
+            });
       return res.data as T;
     } catch (error) {
       if (error instanceof AxiosError && error.response) {
@@ -181,7 +212,14 @@ export class YApiAuthService {
         Cookie: cookie,
         Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
       };
-      const res = await axios.get(url, { params: options.params, headers, responseType: "text" });
+      const res = await axios.get(url, {
+        params: options.params,
+        headers,
+        responseType: "text",
+        timeout: this.httpTimeoutMs,
+        maxContentLength: this.httpMaxHtmlBytes,
+        maxBodyLength: this.httpMaxBodyLength,
+      });
       return String(res.data ?? "");
     } catch (error) {
       if (error instanceof AxiosError && error.response) {

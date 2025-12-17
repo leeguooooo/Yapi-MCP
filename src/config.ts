@@ -1,10 +1,6 @@
-import { config } from "dotenv";
 import yargs from "yargs";
 import { hideBin } from "yargs/helpers";
 import { Logger } from "./services/yapi/logger";
-
-// Load environment variables from .env file
-config();
 
 interface ServerConfig {
   yapiBaseUrl: string;
@@ -15,6 +11,7 @@ interface ServerConfig {
   port: number;
   yapiCacheTTL: number; // 缓存时效，单位为分钟
   yapiLogLevel: string; // 日志级别：debug, info, warn, error
+  yapiHttpTimeoutMs: number;
   configSources: {
     yapiBaseUrl: "cli" | "env" | "default";
     yapiToken: "cli" | "env" | "default";
@@ -24,6 +21,7 @@ interface ServerConfig {
     port: "cli" | "env" | "default";
     yapiCacheTTL: "cli" | "env" | "default";
     yapiLogLevel: "cli" | "env" | "default";
+    yapiHttpTimeoutMs: "cli" | "env" | "default";
   };
 }
 
@@ -38,6 +36,14 @@ function maskSecret(value: string): string {
   return `${value[0]}***${value[value.length - 1]}`;
 }
 
+function maskEmail(email: string): string {
+  const v = String(email || "").trim();
+  if (!v) return "";
+  const at = v.indexOf("@");
+  if (at <= 1) return "***";
+  return `${v[0]}***${v.slice(at)}`;
+}
+
 interface CliArgs {
   "yapi-base-url"?: string;
   "yapi-token"?: string;
@@ -47,6 +53,7 @@ interface CliArgs {
   port?: number;
   "yapi-cache-ttl"?: number;
   "yapi-log-level"?: string;
+  "yapi-http-timeout-ms"?: number;
 }
 
 export function getServerConfig(): ServerConfig {
@@ -87,6 +94,10 @@ export function getServerConfig(): ServerConfig {
         description: "YApi日志级别 (debug, info, warn, error)",
         choices: ["debug", "info", "warn", "error"],
       },
+      "yapi-http-timeout-ms": {
+        type: "number",
+        description: "YApi HTTP 请求超时（毫秒），默认 15000",
+      },
     })
     .help()
     .parseSync() as CliArgs;
@@ -100,6 +111,7 @@ export function getServerConfig(): ServerConfig {
     port: 3388,
     yapiCacheTTL: 10, // 默认缓存10分钟
     yapiLogLevel: "info", // 默认日志级别
+    yapiHttpTimeoutMs: 15_000,
     configSources: {
       yapiBaseUrl: "default",
       yapiToken: "default",
@@ -109,6 +121,7 @@ export function getServerConfig(): ServerConfig {
       port: "default",
       yapiCacheTTL: "default",
       yapiLogLevel: "default",
+      yapiHttpTimeoutMs: "default",
     },
   };
 
@@ -197,6 +210,18 @@ export function getServerConfig(): ServerConfig {
     }
   }
 
+  // Handle YAPI_HTTP_TIMEOUT_MS
+  if (argv["yapi-http-timeout-ms"]) {
+    config.yapiHttpTimeoutMs = argv["yapi-http-timeout-ms"];
+    config.configSources.yapiHttpTimeoutMs = "cli";
+  } else if (process.env.YAPI_HTTP_TIMEOUT_MS) {
+    const ms = parseInt(process.env.YAPI_HTTP_TIMEOUT_MS, 10);
+    if (!isNaN(ms)) {
+      config.yapiHttpTimeoutMs = ms;
+      config.configSources.yapiHttpTimeoutMs = "env";
+    }
+  }
+
   // 创建日志实例
   const logger = new Logger("Config", config.yapiLogLevel);
 
@@ -209,13 +234,16 @@ export function getServerConfig(): ServerConfig {
     `- YAPI_TOKEN: ${config.yapiToken ? maskApiKey(config.yapiToken) : "未配置"} (source: ${config.configSources.yapiToken})`,
   );
   logger.info(`- YAPI_AUTH_MODE: ${config.yapiAuthMode} (source: ${config.configSources.yapiAuthMode})`);
-  logger.info(`- YAPI_EMAIL: ${config.yapiEmail || "未配置"} (source: ${config.configSources.yapiEmail})`);
+  logger.info(
+    `- YAPI_EMAIL: ${config.yapiEmail ? maskEmail(config.yapiEmail) : "未配置"} (source: ${config.configSources.yapiEmail})`,
+  );
   logger.info(
     `- YAPI_PASSWORD: ${config.yapiPassword ? maskSecret(config.yapiPassword) : "未配置"} (source: ${config.configSources.yapiPassword})`,
   );
   logger.info(`- PORT: ${config.port} (source: ${config.configSources.port})`);
   logger.info(`- YAPI_CACHE_TTL: ${config.yapiCacheTTL} 分钟 (source: ${config.configSources.yapiCacheTTL})`);
   logger.info(`- YAPI_LOG_LEVEL: ${config.yapiLogLevel} (source: ${config.configSources.yapiLogLevel})`);
+  logger.info(`- YAPI_HTTP_TIMEOUT_MS: ${config.yapiHttpTimeoutMs} (source: ${config.configSources.yapiHttpTimeoutMs})`);
   logger.info(""); // Empty line for better readability
 
   return config;

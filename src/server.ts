@@ -73,14 +73,15 @@ export class YapiMcpServer {
     yapiLogLevel: string = "info",
     yapiCacheTTL: number = 10,
     auth?: { mode?: "token" | "global"; email?: string; password?: string },
+    http?: { timeoutMs?: number },
   ) {
     this.logger = new Logger("YapiMCP", yapiLogLevel);
-    this.yapiService = new YApiService(yapiBaseUrl, yapiToken, yapiLogLevel);
+    this.yapiService = new YApiService(yapiBaseUrl, yapiToken, yapiLogLevel, { timeoutMs: http?.timeoutMs });
     this.projectInfoCache = new ProjectInfoCache(yapiBaseUrl, yapiCacheTTL, yapiLogLevel);
     this.authMode = auth?.mode ?? (auth?.email && auth?.password ? "global" : "token");
     this.authService =
       this.authMode === "global" && auth?.email && auth?.password
-        ? new YApiAuthService(yapiBaseUrl, auth.email, auth.password, yapiLogLevel)
+        ? new YApiAuthService(yapiBaseUrl, auth.email, auth.password, yapiLogLevel, { timeoutMs: http?.timeoutMs })
         : null;
 
     if (this.authService) {

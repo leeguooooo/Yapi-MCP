@@ -21,24 +21,50 @@ export class YApiService {
   private projectInfoCache: Map<string, ProjectInfo> = new Map(); // 缓存项目信息
   private categoryListCache: Map<string, CategoryInfo[]> = new Map(); // 缓存项目分类列表
   private readonly logger: Logger;
+  private readonly httpTimeoutMs: number;
+  private readonly httpMaxContentLength: number;
+  private readonly httpMaxBodyLength: number;
 
-  constructor(baseUrl: string, token: string, logLevel: string = "info") {
+  constructor(
+    baseUrl: string,
+    token: string,
+    logLevel: string = "info",
+    options: { timeoutMs?: number; maxContentLength?: number; maxBodyLength?: number } = {},
+  ) {
     this.baseUrl = baseUrl;
     this.tokenMap = new Map();
     this.defaultToken = "";
     this.logger = new Logger('YApiService', logLevel);
+    this.httpTimeoutMs = Number.isFinite(options.timeoutMs) ? Number(options.timeoutMs) : 15_000;
+    this.httpMaxContentLength = Number.isFinite(options.maxContentLength) ? Number(options.maxContentLength) : 10 * 1024 * 1024;
+    this.httpMaxBodyLength = Number.isFinite(options.maxBodyLength) ? Number(options.maxBodyLength) : 10 * 1024 * 1024;
     
-    // 解析token字符串，格式为: "projectId:token,projectId:token,..."
+    // 解析 token 字符串：
+    // - 默认 token: "token"
+    // - 多项目 token: "projectId:token,projectId:token"
     if (token) {
-      const tokenPairs = token.split(',');
-      for (const pair of tokenPairs) {
-        const [projectId, projectToken] = pair.trim().split(':');
-        if (projectId && projectToken) {
-          this.tokenMap.set(projectId, projectToken);
-        } else if (!projectId.includes(':')) {
-          // 如果没有冒号，则作为默认token
-          this.defaultToken = pair.trim();
+      const tokenPairs = token.split(",");
+      for (const rawPair of tokenPairs) {
+        const pair = String(rawPair ?? "").trim();
+        if (!pair) continue;
+
+        const idx = pair.indexOf(":");
+        if (idx === -1) {
+          this.defaultToken = pair;
+          continue;
         }
+
+        const projectId = pair.slice(0, idx).trim();
+        const projectToken = pair.slice(idx + 1).trim();
+        if (!projectId) {
+          this.logger.warn(`忽略无效 token 配置（缺少 projectId）: ${pair}`);
+          continue;
+        }
+        if (!projectToken) {
+          this.logger.warn(`忽略无效 token 配置（缺少 token）: ${pair}`);
+          continue;
+        }
+        this.tokenMap.set(projectId, projectToken);
       }
     }
     
@@ -175,7 +201,10 @@ export class YApiService {
             ...params,
             ...(token ? { token } : {})
           },
-          headers
+          headers,
+          timeout: this.httpTimeoutMs,
+          maxContentLength: this.httpMaxContentLength,
+          maxBodyLength: this.httpMaxBodyLength,
         });
       } else {
         const contentType = options.contentType || "json";
@@ -193,9 +222,17 @@ export class YApiService {
           }
           response = await axios.post(`${this.baseUrl}${endpoint}`, form, {
             headers: { "Content-Type": "application/x-www-form-urlencoded", ...(headers ?? {}) },
+            timeout: this.httpTimeoutMs,
+            maxContentLength: this.httpMaxContentLength,
+            maxBodyLength: this.httpMaxBodyLength,
           });
         } else {
-          response = await axios.post(`${this.baseUrl}${endpoint}`, body, { headers });
+          response = await axios.post(`${this.baseUrl}${endpoint}`, body, {
+            headers,
+            timeout: this.httpTimeoutMs,
+            maxContentLength: this.httpMaxContentLength,
+            maxBodyLength: this.httpMaxBodyLength,
+          });
         }
       }
 

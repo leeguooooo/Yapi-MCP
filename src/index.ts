@@ -26,6 +26,7 @@ export async function startServer(): Promise<void> {
       email: config.yapiEmail,
       password: config.yapiPassword,
     },
+    { timeoutMs: config.yapiHttpTimeoutMs },
   );
 
   // Check if we're running in stdio mode (e.g., via CLI)
@@ -51,6 +52,16 @@ export async function startServer(): Promise<void> {
 
 // If this file is being run directly, start the server
 if (require.main === module) {
+  // 仅在作为入口执行时加载 .env，避免库代码污染宿主环境
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { resolve } = require("path");
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const { config } = require("dotenv");
+    config({ path: resolve(process.cwd(), ".env") });
+  } catch {
+    // ignore
+  }
   startServer().catch((error) => {
     console.error("Failed to start server:", error);
     process.exit(1);
