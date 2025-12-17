@@ -1,4 +1,4 @@
-# Releasing `@leeguooooo/yapi-auto-mcp`
+# Releasing `@leeguoo/yapi-auto-mcp`
 
 This repo is a maintained fork for publishing to npm so users can run it via `npx`.
 
@@ -16,4 +16,3 @@ corepack pnpm build
 # bump version in package.json first (semver)
 npm publish --access public
 ```
-
