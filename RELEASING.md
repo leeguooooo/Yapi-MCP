@@ -1,4 +1,4 @@
-# Releasing `@leeguoo/yapi-auto-mcp`
+# Releasing `@leeguoo/yapi-mcp`
 
 This repo is a maintained fork for publishing to npm so users can run it via `npx`.
 

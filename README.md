@@ -72,7 +72,7 @@ Yapi Auto MCP Server 是一个基于 [Model Context Protocol](https://modelconte
       "command": "npx",
       "args": [
         "-y",
-        "@leeguoo/yapi-auto-mcp",
+        "@leeguoo/yapi-mcp",
         "--stdio",
         "--yapi-base-url=https://your-yapi-domain.com",
         "--yapi-token=projectId:your_token_here"
@@ -91,7 +91,7 @@ Yapi Auto MCP Server 是一个基于 [Model Context Protocol](https://modelconte
       "command": "npx",
       "args": [
         "-y",
-        "@leeguoo/yapi-auto-mcp",
+        "@leeguoo/yapi-mcp",
         "--stdio",
         "--yapi-base-url=https://your-yapi-domain.com",
         "--yapi-auth-mode=global",
@@ -118,7 +118,7 @@ Yapi Auto MCP Server 是一个基于 [Model Context Protocol](https://modelconte
       "command": "npx",
       "args": [
         "-y",
-        "@leeguoo/yapi-auto-mcp",
+        "@leeguoo/yapi-mcp",
         "--stdio",
         "--yapi-base-url=https://yapi.example.com",
         "--yapi-token=projectId:token1,projectId2:token2",
@@ -141,7 +141,7 @@ Yapi Auto MCP Server 是一个基于 [Model Context Protocol](https://modelconte
       "command": "npx",
       "args": [
         "-y",
-        "@leeguoo/yapi-auto-mcp",
+        "@leeguoo/yapi-mcp",
         "--stdio"
       ],
       "env": {
@@ -163,7 +163,7 @@ Yapi Auto MCP Server 是一个基于 [Model Context Protocol](https://modelconte
   "mcpServers": {
     "yapi-auto-mcp": {
       "command": "npx",
-      "args": ["-y", "@leeguoo/yapi-auto-mcp", "--stdio"],
+      "args": ["-y", "@leeguoo/yapi-mcp", "--stdio"],
       "env": {
         "YAPI_BASE_URL": "https://yapi.example.com",
         "YAPI_AUTH_MODE": "global",
