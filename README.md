@@ -57,7 +57,7 @@ Yapi Auto MCP Server 是一个基于 [Model Context Protocol](https://modelconte
 如果你日常就在浏览器里使用 YApi，推荐安装 Chrome 扩展 [cross-request-master](https://github.com/leeguooooo/cross-request-master)。它会在 YApi 接口详情页（基本信息区域右上角）提供 **「当前项目 MCP 配置」** / **「所有项目 MCP 配置」** 按钮，可一键生成并复制配置：
 
 - 当前项目：使用 `--yapi-token=projectId:token`
-- 整个项目（全局模式）：使用 `--yapi-auth-mode=global`（账号密码），启动后再调用一次 `yapi_update_token` 自动缓存所有项目 token
+- 所有项目（全局模式）：使用 `--yapi-auth-mode=global`（账号密码），启动后再调用一次 `yapi_update_token` 自动缓存所有项目 token
 
 ### 手动方式：使用 npx（无需安装）
 
@@ -103,7 +103,7 @@ Yapi Auto MCP Server 是一个基于 [Model Context Protocol](https://modelconte
 }
 ```
 
-启动后先在对话里调用一次 `yapi_update_token`，会把 `projectId -> token` 缓存到本地 `~/.yapi-mcp/auth-*.json`，后续所有工具就都能直接使用了。
+启动后先在对话里调用一次 `yapi_update_token`，会把 `projectId -> token` 缓存到本地 `~/.yapi-mcp/auth-*.json`。部分 YApi 部署不会在开放 API 中直接返回 token，本项目会自动兜底从项目设置页抓取 token。
 
 ## 安装配置
 
