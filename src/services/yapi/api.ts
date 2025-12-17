@@ -52,6 +52,10 @@ export class YApiService {
     this.cookieHeader = cookieHeader ? String(cookieHeader).trim() : null;
   }
 
+  hasCookieAuth(): boolean {
+    return Boolean(this.cookieHeader);
+  }
+
   /**
    * 动态更新某个项目的 token（用于全局模式缓存刷新）
    */
@@ -103,6 +107,33 @@ export class YApiService {
 
   hasProjectToken(projectId: string): boolean {
     return Boolean(this.getToken(projectId));
+  }
+
+  /**
+   * 搜索项目（/api/project/search?q=...）
+   * 仅在全局模式（Cookie 登录态）下更可靠。
+   */
+  async searchProjects(q: string): Promise<any[]> {
+    const res = await this.globalSearch(q);
+    return res.project;
+  }
+
+  /**
+   * 全局搜索（/api/project/search?q=...）
+   * 注意：该接口除了 project 之外，还会返回 group / interface。
+   */
+  async globalSearch(q: string): Promise<{ project: any[]; group: any[]; interface: any[] }> {
+    const keyword = String(q ?? "").trim();
+    if (!keyword) return { project: [], group: [], interface: [] };
+
+    const response = await this.request<any>("/api/project/search", { q: keyword }, undefined, "GET");
+    if (response?.errcode !== 0) throw new Error(response?.errmsg || "搜索失败");
+
+    const data = response?.data ?? {};
+    const projects = Array.isArray(data.project) ? data.project : Array.isArray(data.projects) ? data.projects : [];
+    const groups = Array.isArray(data.group) ? data.group : Array.isArray(data.groups) ? data.groups : [];
+    const interfaces = Array.isArray(data.interface) ? data.interface : Array.isArray(data.interfaces) ? data.interfaces : [];
+    return { project: projects, group: groups, interface: interfaces };
   }
 
   private async request<T>(
@@ -453,19 +484,128 @@ export class YApiService {
     );
     
     try {
-      // 1. 获取所有项目信息（或根据关键字过滤）
-      await this.loadAllProjectInfo();
-      let projects = Array.from(this.projectInfoCache.values());
-      
-      // 如果指定了项目关键字，过滤项目列表
-      if (projectKeyword && projectKeyword.trim().length > 0) {
-        const keyword = projectKeyword.trim().toLowerCase();
-        projects = projects.filter(project => {
-          const name = String((project as any)?.name ?? "").toLowerCase();
-          const desc = String((project as any)?.desc ?? "").toLowerCase();
-          const id = String((project as any)?._id ?? "");
-          return name.includes(keyword) || desc.includes(keyword) || id.includes(keyword);
-        });
+      // 1. 获取项目列表（全局模式优先走服务端 project/search，避免本地全量加载）
+      let projects: any[] = [];
+
+      if (projectKeyword && projectKeyword.trim().length > 0 && this.hasCookieAuth()) {
+        projects = await this.searchProjects(projectKeyword);
+
+        // project/search 可能返回的是最小字段集合，这里做一下标准化
+        projects = projects
+          .map(p => ({
+            _id: p?._id ?? p?.id ?? p?.project_id,
+            name: p?.name ?? p?.project_name ?? p?.title ?? "",
+            desc: p?.desc ?? "",
+            group_id: p?.group_id ?? p?.groupId,
+            basepath: p?.basepath ?? p?.base_path ?? "/",
+          }))
+          .filter(p => p._id != null);
+
+        // 某些部署的 project/search 只搜名称，不搜描述；为避免行为变化，空结果时回退到本地过滤
+        if (projects.length === 0) {
+          this.logger.debug("project/search 返回空结果，回退到本地项目缓存过滤");
+          await this.loadAllProjectInfo();
+          projects = Array.from(this.projectInfoCache.values());
+
+          const keyword = projectKeyword.trim().toLowerCase();
+          projects = projects.filter(project => {
+            const name = String((project as any)?.name ?? "").toLowerCase();
+            const desc = String((project as any)?.desc ?? "").toLowerCase();
+            const id = String((project as any)?._id ?? "");
+            return name.includes(keyword) || desc.includes(keyword) || id.includes(keyword);
+          });
+        }
+      } else if (this.hasCookieAuth() && (projectKeyword || nameKeywords.length || pathKeywords.length || tagKeywords.length)) {
+        // 全局模式：若提供了任意关键词，优先用 /api/project/search 一次性拿 interface 命中集，避免逐项目扫接口
+        const q = [projectKeyword, ...nameKeywords, ...pathKeywords, ...tagKeywords].filter(Boolean).join(" ").trim();
+        if (q) {
+          const searched = await this.globalSearch(q);
+
+          const projectNameById = new Map<string, string>();
+          for (const p of searched.project) {
+            const pid = String(p?._id ?? p?.id ?? p?.projectId ?? p?.project_id ?? "");
+            if (!pid) continue;
+            const name = String(p?.name ?? p?.project_name ?? p?.title ?? "").trim();
+            if (name) projectNameById.set(pid, name);
+          }
+
+          const candidates = (searched.interface ?? [])
+            .map((it: any) => ({
+              _id: String(it?._id ?? it?.id ?? ""),
+              projectId: String(it?.projectId ?? it?.project_id ?? it?.project ?? ""),
+              title: String(it?.title ?? ""),
+              addTime: it?.addTime ?? it?.add_time,
+              upTime: it?.upTime ?? it?.up_time,
+            }))
+            .filter(it => it._id && it.projectId);
+
+          if (candidates.length === 0) {
+            this.logger.info("全局搜索未命中任何接口");
+            return { total: 0, list: [] };
+          }
+
+          const limitedCandidates = candidates.slice(0, limit);
+          const byProject = new Map<string, typeof limitedCandidates>();
+          for (const it of limitedCandidates) {
+            const arr = byProject.get(it.projectId) ?? [];
+            arr.push(it);
+            byProject.set(it.projectId, arr);
+          }
+
+          const catNameByProject = new Map<string, Map<string, string>>();
+          await Promise.all(
+            Array.from(byProject.keys()).map(async pid => {
+              try {
+                const cats = await this.getCategoryList(pid);
+                const m = new Map<string, string>();
+                for (const c of cats) m.set(String((c as any)._id), String((c as any).name ?? ""));
+                catNameByProject.set(pid, m);
+              } catch {
+                // ignore
+              }
+            }),
+          );
+
+          const results: Array<any> = [];
+          for (const it of limitedCandidates) {
+            try {
+              const detail = await this.getApiInterface(it.projectId, it._id);
+              const catid = String((detail as any).catid ?? "");
+              const catName = catid ? catNameByProject.get(it.projectId)?.get(catid) : undefined;
+
+              results.push({
+                _id: String((detail as any)._id ?? it._id),
+                title: String((detail as any).title ?? it.title ?? ""),
+                path: String((detail as any).path ?? ""),
+                method: String((detail as any).method ?? ""),
+                project_id: Number.isFinite(Number(it.projectId)) ? Number(it.projectId) : it.projectId,
+                add_time: (detail as any).add_time ?? it.addTime ?? Date.now() / 1000,
+                up_time: (detail as any).up_time ?? it.upTime ?? Date.now() / 1000,
+                catid: (detail as any).catid,
+                project_name: projectNameById.get(it.projectId) || undefined,
+                cat_name: catName || undefined,
+              });
+            } catch (e) {
+              this.logger.debug(`全局搜索命中接口但拉取详情失败(projectId=${it.projectId}, id=${it._id}):`, e);
+            }
+          }
+
+          const deduplicated = this.deduplicateResults(results);
+          return { total: deduplicated.length, list: deduplicated };
+        }
+      } else {
+        await this.loadAllProjectInfo();
+        projects = Array.from(this.projectInfoCache.values());
+
+        if (projectKeyword && projectKeyword.trim().length > 0) {
+          const keyword = projectKeyword.trim().toLowerCase();
+          projects = projects.filter(project => {
+            const name = String((project as any)?.name ?? "").toLowerCase();
+            const desc = String((project as any)?.desc ?? "").toLowerCase();
+            const id = String((project as any)?._id ?? "");
+            return name.includes(keyword) || desc.includes(keyword) || id.includes(keyword);
+          });
+        }
       }
       
       // 限制只搜索前几个匹配的项目
