@@ -460,11 +460,12 @@ export class YApiService {
       // 如果指定了项目关键字，过滤项目列表
       if (projectKeyword && projectKeyword.trim().length > 0) {
         const keyword = projectKeyword.trim().toLowerCase();
-        projects = projects.filter(project => 
-          project.name.toLowerCase().includes(keyword) || 
-          project.desc.toLowerCase().includes(keyword) ||
-          String(project._id).includes(keyword)
-        );
+        projects = projects.filter(project => {
+          const name = String((project as any)?.name ?? "").toLowerCase();
+          const desc = String((project as any)?.desc ?? "").toLowerCase();
+          const id = String((project as any)?._id ?? "");
+          return name.includes(keyword) || desc.includes(keyword) || id.includes(keyword);
+        });
       }
       
       // 限制只搜索前几个匹配的项目
