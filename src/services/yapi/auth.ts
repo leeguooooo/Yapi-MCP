@@ -4,6 +4,45 @@ import { YApiAuthCache, YApiSessionCookie } from "./authCache";
 
 type JsonObject = Record<string, any>;
 
+function looksLikeToken(val: unknown): boolean {
+  if (typeof val !== "string") return false;
+  const s = val.trim();
+  if (s.length < 24) return false;
+  if (s.length > 128) return false;
+  if (/^[a-f0-9]{32}$/i.test(s)) return true;
+  if (/^[a-f0-9]{64}$/i.test(s)) return true;
+  if (!/^[a-zA-Z0-9_-]+$/.test(s)) return false;
+  if (!/[a-zA-Z]/.test(s) || !/[0-9]/.test(s)) return false;
+  return true;
+}
+
+function findTokenInObject(obj: unknown, depth: number = 0): string | undefined {
+  if (depth > 6) return undefined;
+  if (!obj) return undefined;
+  if (typeof obj === "string") return looksLikeToken(obj) ? obj.trim() : undefined;
+  if (typeof obj !== "object") return undefined;
+  if (Array.isArray(obj)) {
+    for (const item of obj) {
+      const hit = findTokenInObject(item, depth + 1);
+      if (hit) return hit;
+    }
+    return undefined;
+  }
+
+  const record = obj as Record<string, unknown>;
+  const preferredKeys = ["token", "project_token", "projectToken", "projectTokenValue"];
+  for (const key of preferredKeys) {
+    const v = record[key];
+    if (typeof v === "string" && looksLikeToken(v)) return v.trim();
+  }
+
+  for (const key of Object.keys(record)) {
+    const hit = findTokenInObject(record[key], depth + 1);
+    if (hit) return hit;
+  }
+  return undefined;
+}
+
 function pickCookieValue(setCookie: string[] | undefined, key: string): string | undefined {
   if (!setCookie || setCookie.length === 0) return undefined;
   const prefix = `${key}=`;
@@ -49,6 +88,12 @@ export class YApiAuthService {
 
   loadCachedProjectTokens(): Map<string, string> {
     return this.cache.loadProjectTokens();
+  }
+
+  getCachedCookieHeader(): string | null {
+    const cached = this.cache.loadSession();
+    if (!this.isSessionValid(cached)) return null;
+    return this.getCookieHeader(cached);
   }
 
   private getCookieHeader(session: YApiSessionCookie): string {
@@ -124,6 +169,28 @@ export class YApiAuthService {
     }
   }
 
+  private async cookieRequestText(
+    endpoint: string,
+    session: YApiSessionCookie,
+    options: { params?: JsonObject } = {},
+  ): Promise<string> {
+    try {
+      const url = `${this.baseUrl}${endpoint}`;
+      const cookie = this.getCookieHeader(session);
+      const headers: Record<string, string> = {
+        Cookie: cookie,
+        Accept: "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+      };
+      const res = await axios.get(url, { params: options.params, headers, responseType: "text" });
+      return String(res.data ?? "");
+    } catch (error) {
+      if (error instanceof AxiosError && error.response) {
+        throw new Error((error.response.data as any)?.errmsg || "请求失败");
+      }
+      throw error instanceof Error ? error : new Error("请求失败");
+    }
+  }
+
   private async listGroups(session: YApiSessionCookie): Promise<any[]> {
     // 有些实例同时支持 group/get_mygroup 和 group/list，这里尽量都试一下并去重
     const groups: any[] = [];
@@ -176,10 +243,44 @@ export class YApiAuthService {
     return res.data;
   }
 
+  private async getProjectTokenFromSettingPage(session: YApiSessionCookie, projectId: string): Promise<string | undefined> {
+    const html = await this.cookieRequestText(`/project/${encodeURIComponent(projectId)}/setting`, session);
+    const tokenRegexes = [
+      /(?:project\s*token|项目\s*token|token)\s*[:：]\s*([a-zA-Z0-9_-]{24,128})/i,
+      /name\s*=\s*"token"[\s\S]{0,200}?value\s*=\s*"([a-zA-Z0-9_-]{24,128})"/i,
+      /id\s*=\s*"token"[\s\S]{0,200}?value\s*=\s*"([a-zA-Z0-9_-]{24,128})"/i,
+    ];
+    for (const re of tokenRegexes) {
+      const m = re.exec(html);
+      if (m && m[1] && looksLikeToken(m[1])) return m[1].trim();
+    }
+    return undefined;
+  }
+
+  async listAccessibleProjects(options: { forceLogin?: boolean } = {}): Promise<{ groups: any[]; projects: any[] }> {
+    const session = await this.login(Boolean(options.forceLogin));
+    const groups = await this.listGroups(session);
+    const projects: any[] = [];
+
+    for (const g of groups) {
+      const groupId = String(g?._id ?? g?.id ?? "");
+      if (!groupId) continue;
+      try {
+        const list = await this.listProjectsInGroup(session, groupId);
+        projects.push(...list);
+      } catch (e) {
+        this.logger.warn(`获取分组项目列表失败(groupId=${groupId}): ${e}`);
+      }
+    }
+
+    return { groups, projects };
+  }
+
   async refreshProjectTokens(
     options: { forceLogin?: boolean } = {},
-  ): Promise<{ tokens: Map<string, string>; projects: any[]; groups: any[] }> {
+  ): Promise<{ tokens: Map<string, string>; projects: any[]; groups: any[]; cookieHeader: string }> {
     const session = await this.login(Boolean(options.forceLogin));
+    const cookieHeader = this.getCookieHeader(session);
     const groups = await this.listGroups(session);
     const projects: any[] = [];
 
@@ -199,16 +300,27 @@ export class YApiAuthService {
       const projectId = String(p?._id ?? p?.id ?? "");
       if (!projectId) continue;
       try {
+        const tokenFromList = findTokenInObject(p);
+        if (tokenFromList) {
+          tokens.set(projectId, tokenFromList);
+          continue;
+        }
+
         const detail = await this.getProjectDetail(session, projectId);
-        const token = String(detail?.token ?? "").trim();
-        if (token) tokens.set(projectId, token);
+        const tokenFromGet = findTokenInObject(detail);
+        if (tokenFromGet) {
+          tokens.set(projectId, tokenFromGet);
+          continue;
+        }
+
+        const tokenFromHtml = await this.getProjectTokenFromSettingPage(session, projectId);
+        if (tokenFromHtml) tokens.set(projectId, tokenFromHtml);
       } catch (e) {
         this.logger.warn(`获取项目 token 失败(projectId=${projectId}): ${e}`);
       }
     }
 
     this.cache.saveProjectTokens(tokens);
-    return { tokens, projects, groups };
+    return { tokens, projects, groups, cookieHeader };
   }
 }
-
