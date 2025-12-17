@@ -261,13 +261,20 @@ export class YApiAuthService {
     const session = await this.login(Boolean(options.forceLogin));
     const groups = await this.listGroups(session);
     const projects: any[] = [];
+    const seenProjectId = new Set<string>();
 
     for (const g of groups) {
       const groupId = String(g?._id ?? g?.id ?? "");
       if (!groupId) continue;
       try {
         const list = await this.listProjectsInGroup(session, groupId);
-        projects.push(...list);
+        for (const p of list) {
+          const pid = String(p?._id ?? p?.id ?? "");
+          if (!pid) continue;
+          if (seenProjectId.has(pid)) continue;
+          seenProjectId.add(pid);
+          projects.push(p);
+        }
       } catch (e) {
         this.logger.warn(`获取分组项目列表失败(groupId=${groupId}): ${e}`);
       }
