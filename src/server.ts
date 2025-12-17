@@ -424,6 +424,24 @@ export class YapiMcpServer {
       },
     );
 
+    // 搜索项目（/api/project/search）
+    this.server.tool(
+      "yapi_project_search",
+      "搜索项目（对应 /api/project/search）",
+      {
+        q: z.string().describe("搜索关键字"),
+      },
+      async ({ q }) => {
+        try {
+          const data = await this.yapiService.globalSearch(q);
+          return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+        } catch (error) {
+          this.logger.error(`搜索项目失败:`, error);
+          return { content: [{ type: "text", text: `搜索项目失败: ${error}` }] };
+        }
+      },
+    );
+
     // 获取接口数据（/api/interface/get）
     this.server.tool(
       "yapi_interface_get",
