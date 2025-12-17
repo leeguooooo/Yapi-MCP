@@ -45,6 +45,17 @@ export class YApiService {
     this.logger.info(`YApiService已初始化，baseUrl=${baseUrl}`);
   }
 
+  getBaseUrl(): string {
+    return this.baseUrl;
+  }
+
+  buildInterfaceWebUrl(projectId: string, apiId: string): string {
+    const base = String(this.baseUrl || "").replace(/\/+$/, "");
+    const pid = encodeURIComponent(String(projectId ?? ""));
+    const aid = encodeURIComponent(String(apiId ?? ""));
+    return `${base}/project/${pid}/interface/api/${aid}`;
+  }
+
   /**
    * 设置 Cookie（全局模式：使用登录态调用 YApi；也可与 token 并用）
    */
