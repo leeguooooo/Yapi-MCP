@@ -363,6 +363,8 @@ export class YapiMcpServer {
           const apiInterface = await this.yapiService.getApiInterface(projectId, apiId);
           this.logger.info(`成功获取API接口: ${apiInterface.title || apiId}`);
 
+          const webUrl = this.yapiService.buildInterfaceWebUrl(projectId, apiId);
+
           // 格式化返回数据，使其更易于阅读
           const formattedResponse = {
             基本信息: {
@@ -370,7 +372,8 @@ export class YapiMcpServer {
               接口名称: apiInterface.title,
               接口路径: apiInterface.path,
               请求方式: apiInterface.method,
-              接口描述: apiInterface.desc
+              接口描述: apiInterface.desc,
+              接口页面: webUrl
             },
             请求参数: {
               URL参数: apiInterface.req_params,
@@ -854,6 +857,7 @@ export class YapiMcpServer {
 
           // 按项目分组整理结果
           const apisByProject: Record<string, {
+            projectId: string,
             projectName: string,
             apis: Array<{
               id: string,
@@ -862,7 +866,8 @@ export class YapiMcpServer {
               method: string,
               catName: string,
               createTime: string,
-              updateTime: string
+              updateTime: string,
+              webUrl: string
             }>
           }> = {};
 
@@ -873,6 +878,7 @@ export class YapiMcpServer {
 
             if (!apisByProject[projectId]) {
               apisByProject[projectId] = {
+                projectId,
                 projectName,
                 apis: []
               };
@@ -885,7 +891,8 @@ export class YapiMcpServer {
               method: api.method,
               catName: api.cat_name || '未知分类',
               createTime: new Date(api.add_time).toLocaleString(),
-              updateTime: new Date(api.up_time).toLocaleString()
+              updateTime: new Date(api.up_time).toLocaleString(),
+              webUrl: this.yapiService.buildInterfaceWebUrl(projectId, api._id)
             });
           });
 
@@ -909,15 +916,16 @@ export class YapiMcpServer {
                 responseContent += `### ${api.title} (${api.method} ${api.path})\n\n`;
                 responseContent += `- 接口ID: ${api.id}\n`;
                 responseContent += `- 所属分类: ${api.catName}\n`;
+                responseContent += `- 接口页面: ${api.webUrl}\n`;
                 responseContent += `- 更新时间: ${api.updateTime}\n\n`;
               });
             } else {
               // 大量接口，展示简洁表格
-              responseContent += "| 接口ID | 接口名称 | 请求方式 | 接口路径 | 所属分类 |\n";
-              responseContent += "| ------ | -------- | -------- | -------- | -------- |\n";
+              responseContent += "| 接口ID | 接口名称 | 请求方式 | 接口路径 | 所属分类 | YApi 页面 |\n";
+              responseContent += "| ------ | -------- | -------- | -------- | -------- | -------- |\n";
 
               projectGroup.apis.forEach(api => {
-                responseContent += `| ${api.id} | ${api.title} | ${api.method} | ${api.path} | ${api.catName} |\n`;
+                responseContent += `| ${api.id} | ${api.title} | ${api.method} | ${api.path} | ${api.catName} | ${api.webUrl} |\n`;
               });
 
               responseContent += "\n";
@@ -925,7 +933,7 @@ export class YapiMcpServer {
           });
 
           // 添加使用提示
-          responseContent += "\n提示: 可以使用 `get_api_desc` 工具获取接口的详细信息，例如: `get_api_desc projectId=228 apiId=8570`";
+          responseContent += "\n提示: 可以使用 `yapi_get_api_desc` 工具获取接口的详细信息，例如: `yapi_get_api_desc projectId=232 apiId=12961`";
 
           return {
             content: [{ type: "text", text: responseContent }],
