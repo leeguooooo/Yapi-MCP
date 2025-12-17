@@ -17,6 +17,7 @@ export class YApiService {
   private readonly baseUrl: string;
   private readonly tokenMap: Map<string, string>;
   private readonly defaultToken: string;
+  private cookieHeader: string | null = null;
   private projectInfoCache: Map<string, ProjectInfo> = new Map(); // 缓存项目信息
   private categoryListCache: Map<string, CategoryInfo[]> = new Map(); // 缓存项目分类列表
   private readonly logger: Logger;
@@ -42,6 +43,13 @@ export class YApiService {
     }
     
     this.logger.info(`YApiService已初始化，baseUrl=${baseUrl}`);
+  }
+
+  /**
+   * 设置 Cookie（全局模式：使用登录态调用 YApi；也可与 token 并用）
+   */
+  setCookieHeader(cookieHeader: string | null): void {
+    this.cookieHeader = cookieHeader ? String(cookieHeader).trim() : null;
   }
 
   /**
@@ -93,6 +101,10 @@ export class YApiService {
     return this.tokenMap.get(projectId) || this.defaultToken;
   }
 
+  hasProjectToken(projectId: string): boolean {
+    return Boolean(this.getToken(projectId));
+  }
+
   private async request<T>(
     endpoint: string,
     params: Record<string, any> = {},
@@ -105,26 +117,29 @@ export class YApiService {
       
       // 使用项目ID获取对应的token，如果没有提供项目ID则使用默认token
       const token = projectId ? this.getToken(projectId) : this.defaultToken;
+      const cookieHeader = this.cookieHeader;
       
-      if (!token) {
+      if (!token && !cookieHeader) {
         const pid = projectId ? `projectId=${projectId}` : "projectId=未提供";
         throw new Error(`未配置 token（${pid}）。如使用全局模式，请先调用 yapi_update_token 生成本地缓存；或通过 --yapi-token / YAPI_TOKEN 配置项目 token`);
       }
       
       let response;
+      const headers: Record<string, string> | undefined = cookieHeader ? { Cookie: cookieHeader } : undefined;
       
       if (method === 'GET') {
         response = await axios.get(`${this.baseUrl}${endpoint}`, {
           params: {
             ...params,
-            token: token
-          }
+            ...(token ? { token } : {})
+          },
+          headers
         });
       } else {
         const contentType = options.contentType || "json";
         const body = {
           ...params,
-          token: token,
+          ...(token ? { token } : {}),
         };
         if (contentType === "form") {
           const form = new URLSearchParams();
@@ -135,22 +150,26 @@ export class YApiService {
             else form.set(key, JSON.stringify(value));
           }
           response = await axios.post(`${this.baseUrl}${endpoint}`, form, {
-            headers: { "Content-Type": "application/x-www-form-urlencoded" },
+            headers: { "Content-Type": "application/x-www-form-urlencoded", ...(headers ?? {}) },
           });
         } else {
-          response = await axios.post(`${this.baseUrl}${endpoint}`, body);
+          response = await axios.post(`${this.baseUrl}${endpoint}`, body, { headers });
         }
       }
 
       return response.data;
     } catch (error) {
       if (error instanceof AxiosError && error.response) {
-        throw {
-          status: error.response.status,
-          message: error.response.data?.errmsg || "未知错误",
-        };
+        const errmsg =
+          (typeof error.response.data === "object" && error.response.data
+            ? (error.response.data as any).errmsg
+            : undefined) ||
+          error.message ||
+          "未知错误";
+        throw new Error(errmsg);
       }
-      throw new Error("与YApi服务器通信失败");
+      if (error instanceof Error) throw error;
+      throw new Error(`与YApi服务器通信失败: ${String(error)}`);
     }
   }
 
