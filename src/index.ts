@@ -27,6 +27,7 @@ export async function startServer(): Promise<void> {
       password: config.yapiPassword,
     },
     { timeoutMs: config.yapiHttpTimeoutMs },
+    { toolset: config.yapiToolset },
   );
 
   // Check if we're running in stdio mode (e.g., via CLI)
@@ -47,7 +48,7 @@ export async function startServer(): Promise<void> {
   logger.info("- yapi_search_apis: 搜索YApi接口");
   logger.info("- yapi_list_projects: 列出YApi的项目ID和项目名称");
   logger.info("- yapi_get_categories: 获取YApi项目下的接口分类列表");
-  logger.info("- yapi_update_token: 全局模式登录并刷新本地 token 缓存");
+  logger.info("- yapi_update_token: 全局模式登录并刷新本地登录态 Cookie");
 }
 
 // If this file is being run directly, start the server

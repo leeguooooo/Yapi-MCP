@@ -65,6 +65,7 @@ export class YapiMcpServer {
   private readonly logger: Logger;
   private readonly authService: YApiAuthService | null;
   private readonly authMode: "token" | "global";
+  private readonly toolset: "basic" | "full";
   private sseTransport: SSEServerTransport | null = null;
   private readonly isStdioMode: boolean;
 
@@ -75,6 +76,7 @@ export class YapiMcpServer {
     yapiCacheTTL: number = 10,
     auth?: { mode?: "token" | "global"; email?: string; password?: string },
     http?: { timeoutMs?: number },
+    tools?: { toolset?: "basic" | "full" },
   ) {
     this.logger = new Logger("YapiMCP", yapiLogLevel);
     this.yapiService = new YApiService(yapiBaseUrl, yapiToken, yapiLogLevel, { timeoutMs: http?.timeoutMs });
@@ -84,13 +86,9 @@ export class YapiMcpServer {
       this.authMode === "global" && auth?.email && auth?.password
         ? new YApiAuthService(yapiBaseUrl, auth.email, auth.password, yapiLogLevel, { timeoutMs: http?.timeoutMs })
         : null;
+    this.toolset = tools?.toolset ?? "full";
 
     if (this.authService) {
-      // 尝试从全局缓存恢复项目 token，避免每次都需要手动刷新
-      const cachedTokens = this.authService.loadCachedProjectTokens();
-      this.yapiService.setProjectTokens(cachedTokens, { overwrite: false });
-      this.logger.info(`全局模式已启用：已从本地缓存加载 ${cachedTokens.size} 个项目 token`);
-
       const cachedCookie = this.authService.getCachedCookieHeader();
       if (cachedCookie) {
         this.yapiService.setCookieHeader(cachedCookie);
@@ -202,6 +200,8 @@ export class YapiMcpServer {
   }
 
   private registerTools(): void {
+    const isFull = this.toolset === "full";
+
     const yapiParamItemSchema = z
       .object({
         name: z.string().describe("参数名"),
@@ -217,6 +217,32 @@ export class YapiMcpServer {
         value: z.string().optional().describe("Header 值（如 application/json）"),
       })
       .passthrough();
+
+    const normalizeRequiredString = (value: unknown): string => String(value ?? "").trim();
+
+    const normalizeProjectId = (value: unknown): string => {
+      const s = normalizeRequiredString(value);
+      // 允许从 URL/片段中提取数字 id
+      const m = /(\d+)/.exec(s);
+      return m ? m[1] : s;
+    };
+
+    const normalizeCatId = (value: unknown): string => {
+      const s = normalizeRequiredString(value);
+      // 兼容页面路由里的 cat_ 前缀
+      const m = /^cat_(\d+)$/i.exec(s);
+      return m ? m[1] : s;
+    };
+
+    const normalizeHttpMethod = (value: unknown): string => normalizeRequiredString(value).toUpperCase();
+
+    const normalizeApiPath = (value: unknown): string => {
+      // LLM 容易把 path 输出成多行；path 里不应出现空白字符
+      const raw = String(value ?? "");
+      const compact = raw.replace(/\s+/g, "");
+      if (!compact) return "";
+      return compact.startsWith("/") ? compact : `/${compact}`;
+    };
 
     const buildInterfaceSaveParams = async (input: {
       projectId: string;
@@ -247,13 +273,14 @@ export class YapiMcpServer {
       let current: any | null = null;
 
       if (isUpdate) {
-        current = await this.yapiService.getApiInterface(input.projectId, input.id as string);
+        current = await this.yapiService.getApiInterface(normalizeProjectId(input.projectId), String(input.id));
       }
 
-      const finalCatid = input.catid ?? (current ? String((current as any).catid ?? "") : "");
-      const finalTitle = input.title ?? (current ? String((current as any).title ?? "") : "");
-      const finalPath = input.path ?? (current ? String((current as any).path ?? "") : "");
-      const finalMethod = input.method ?? (current ? String((current as any).method ?? "") : "");
+      const finalProjectId = normalizeProjectId(input.projectId);
+      const finalCatid = normalizeCatId(input.catid ?? (current ? String((current as any).catid ?? "") : ""));
+      const finalTitle = normalizeRequiredString(input.title ?? (current ? String((current as any).title ?? "") : ""));
+      const finalPath = normalizeApiPath(input.path ?? (current ? String((current as any).path ?? "") : ""));
+      const finalMethod = normalizeHttpMethod(input.method ?? (current ? String((current as any).method ?? "") : ""));
 
       if (!finalCatid) return { ok: false, error: "缺少 catid：新增必填；更新可省略但必须能从原接口读取到" };
       if (!finalTitle) return { ok: false, error: "缺少 title：新增必填；更新可省略但必须能从原接口读取到" };
@@ -261,7 +288,7 @@ export class YapiMcpServer {
       if (!finalMethod) return { ok: false, error: "缺少 method：新增必填；更新可省略但必须能从原接口读取到" };
 
       const params: any = {
-        project_id: input.projectId,
+        project_id: finalProjectId,
         catid: finalCatid,
         title: finalTitle,
         path: finalPath,
@@ -326,10 +353,10 @@ export class YapiMcpServer {
       return { ok: true, params, isUpdate };
     };
 
-    // 全局模式：登录并刷新本地项目 token 缓存
+    // 全局模式：登录并刷新本地登录态 Cookie
     this.server.tool(
       "yapi_update_token",
-      "全局模式：使用用户名/密码登录 YApi，刷新本地缓存的 projectId -> token（用于后续调用开放 API）",
+      "全局模式：使用用户名/密码登录 YApi，刷新本地登录态 Cookie（并可选刷新项目信息缓存）",
       {
         forceLogin: z.boolean().optional().describe("是否强制重新登录（忽略已缓存的 cookie）"),
       },
@@ -347,11 +374,32 @@ export class YapiMcpServer {
             };
           }
 
-          const { tokens, groups, projects, cookieHeader } = await this.authService.refreshProjectTokens({ forceLogin });
-          this.yapiService.setProjectTokens(tokens, { overwrite: true });
+          const cookieHeader = await this.authService.getCookieHeaderWithLogin({ forceLogin });
           this.yapiService.setCookieHeader(cookieHeader);
 
           // 刷新项目信息/分类缓存（可选，但有助于 list/search）
+          const { groups, projects } = await this.authService.listAccessibleProjects({ forceLogin });
+
+          // 用 project/list 的结果快速填充项目缓存，避免强依赖“项目 token”
+          projects.forEach((p: any) => {
+            const projectId = String(p?._id ?? p?.id ?? "");
+            if (!projectId) return;
+            const groupIdRaw = p?.group_id ?? p?.groupId ?? 0;
+            const uidRaw = p?.uid ?? 0;
+            const groupId = Number(groupIdRaw);
+            const uid = Number(uidRaw);
+            const info = {
+              _id: projectId,
+              name: p?.name || p?.project_name || p?.title || "",
+              desc: p?.desc || "",
+              group_id: Number.isFinite(groupId) ? groupId : 0,
+              uid: Number.isFinite(uid) ? uid : 0,
+              basepath: p?.basepath || "",
+            } as any;
+            this.yapiService.getProjectInfoCache().set(projectId, info);
+          });
+
+          // 如项目缓存为空（或希望补全字段），可以再走 project/get 逐个拉取
           await this.yapiService.loadAllProjectInfo();
           this.projectInfoCache.saveToCache(this.yapiService.getProjectInfoCache());
           await this.yapiService.loadAllCategoryLists();
@@ -360,17 +408,13 @@ export class YapiMcpServer {
             content: [
               {
                 type: "text",
-                text: `token 刷新完成：分组 ${groups.length} 个，项目 ${projects.length} 个，已缓存 token ${tokens.size} 个。${
-                  tokens.size === 0
-                    ? "（提示：部分 YApi 部署不会在开放 API 返回 token，本工具已尝试从项目设置页抓取；如仍为 0，可能账号权限不足或实例限制展示 token。）"
-                    : ""
-                }`,
+                text: `登录态刷新完成：分组 ${groups.length} 个，项目 ${projects.length} 个；已更新 Cookie，并刷新项目信息/分类缓存。`,
               },
             ],
           };
         } catch (error) {
-          this.logger.error("刷新 token 失败:", error);
-          return { content: [{ type: "text", text: `刷新 token 失败: ${error}` }] };
+          this.logger.error("刷新登录态失败:", error);
+          return { content: [{ type: "text", text: `刷新登录态失败: ${error}` }] };
         }
       },
     );
@@ -472,23 +516,25 @@ export class YapiMcpServer {
     );
 
     // 获取接口数据（/api/interface/get）
-    this.server.tool(
-      "yapi_interface_get",
-      "获取接口数据（对应 /api/interface/get，返回原始字段）",
-      {
-        projectId: z.string().describe("YApi项目ID（用于选择 token）"),
-        apiId: z.string().describe("接口ID"),
-      },
-      async ({ projectId, apiId }) => {
-        try {
-          const apiInterface = await this.yapiService.getApiInterface(projectId, apiId);
-          return { content: [{ type: "text", text: JSON.stringify(apiInterface, null, 2) }] };
-        } catch (error) {
-          this.logger.error(`获取接口数据失败:`, error);
-          return { content: [{ type: "text", text: `获取接口数据失败: ${error}` }] };
-        }
-      },
-    );
+    if (isFull) {
+      this.server.tool(
+        "yapi_interface_get",
+        "获取接口数据（对应 /api/interface/get，返回原始字段）",
+        {
+          projectId: z.string().describe("YApi项目ID（用于选择 token）"),
+          apiId: z.string().describe("接口ID"),
+        },
+        async ({ projectId, apiId }) => {
+          try {
+            const apiInterface = await this.yapiService.getApiInterface(projectId, apiId);
+            return { content: [{ type: "text", text: JSON.stringify(apiInterface, null, 2) }] };
+          } catch (error) {
+            this.logger.error(`获取接口数据失败:`, error);
+            return { content: [{ type: "text", text: `获取接口数据失败: ${error}` }] };
+          }
+        },
+      );
+    }
 
     // 保存API接口
     this.server.tool(
@@ -627,6 +673,7 @@ export class YapiMcpServer {
       },
     );
 
+    if (isFull) {
     // 获取菜单列表（/api/interface/getCatMenu）
     this.server.tool(
       "yapi_interface_get_cat_menu",
@@ -856,6 +903,7 @@ export class YapiMcpServer {
         }
       },
     );
+    }
 
     // 搜索API接口
     this.server.tool(
@@ -1004,7 +1052,7 @@ export class YapiMcpServer {
                 项目描述: p?.desc || "无描述",
                 基础路径: p?.basepath || "/",
                 项目分组ID: p?.group_id ?? p?.groupId ?? "",
-                已缓存Token: id ? (this.yapiService.hasProjectToken(id) ? "是" : "否") : "否",
+                鉴权方式: "Cookie（全局模式）",
               };
             });
 

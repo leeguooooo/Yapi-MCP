@@ -28,7 +28,7 @@ Yapi Auto MCP Server 是一个基于 [Model Context Protocol](https://modelconte
 - **yapi_project_get**: 获取项目详情（对应 `/api/project/get`）
 - **yapi_get_categories**: 获取项目下的接口分类和接口列表（支持只返回分类/或包含接口列表）
 - **yapi_interface_get_cat_menu**: 获取分类菜单（对应 `/api/interface/getCatMenu`）
-- **yapi_update_token**: 全局模式登录并刷新本地项目 token 缓存（只需配置一次账号密码）
+- **yapi_update_token**: 全局模式登录并刷新本地登录态 Cookie（可选刷新项目/分类缓存）
 
 ### ✏️ 接口管理
 
@@ -54,10 +54,29 @@ Yapi Auto MCP Server 是一个基于 [Model Context Protocol](https://modelconte
 
 ### 推荐方式：用 Cross Request Master 一键生成 MCP 配置（免手动找 Token）
 
-如果你日常就在浏览器里使用 YApi，推荐安装 Chrome 扩展 [cross-request-master](https://github.com/leeguooooo/cross-request-master)。它会在 YApi 接口详情页（基本信息区域右上角）提供 **「当前项目 MCP 配置」** / **「所有项目 MCP 配置」** 按钮，可一键生成并复制配置：
+如果你日常就在浏览器里使用 YApi，推荐安装 Chrome 扩展 [cross-request-master](https://github.com/leeguooooo/cross-request-master)。它会在 YApi 接口详情页（基本信息区域右上角）提供 **「MCP 配置（所有项目）」** / **「Skill 一键安装」** 按钮，可一键生成并复制配置：
 
-- 当前项目：使用 `--yapi-token=projectId:token`
-- 所有项目（全局模式）：使用 `--yapi-auth-mode=global`（账号密码），启动后再调用一次 `yapi_update_token` 自动缓存所有项目 token
+- MCP 配置（所有项目）：使用 `--yapi-auth-mode=global`（账号密码），启动后调用一次 `yapi_update_token` 刷新登录态 Cookie（并可选刷新项目缓存）
+- Skill 一键安装：生成 Codex/Claude Skill，并写入全局配置 `~/.yapi/config.toml`
+
+### Skill 一键安装与 CLI
+
+一条命令把 Skill 安装到 Codex / Claude Code，并写入 `~/.yapi/config.toml`（缺省会提示输入）：
+
+```bash
+npx -y @leeguoo/yapi-mcp install-skill \
+  --yapi-base-url=https://your-yapi-domain.com \
+  --yapi-email=your_email@example.com \
+  --yapi-password=your_password
+```
+
+CLI 使用示例（走同一份 `~/.yapi/config.toml`）：
+
+```bash
+npx -y @leeguoo/yapi-mcp yapi -V
+npx -y @leeguoo/yapi-mcp yapi -h
+npx -y @leeguoo/yapi-mcp yapi --path /api/interface/get --query id=123
+```
 
 ### 手动方式：使用 npx（无需安装）
 
@@ -82,7 +101,7 @@ Yapi Auto MCP Server 是一个基于 [Model Context Protocol](https://modelconte
 }
 ```
 
-2) **全局模式**（只配置一次账号密码，项目 token 自动本地缓存）
+2) **全局模式**（只配置一次账号密码，使用登录态 Cookie 调用页面同款接口）
 
 ```json
 {
@@ -96,14 +115,15 @@ Yapi Auto MCP Server 是一个基于 [Model Context Protocol](https://modelconte
         "--yapi-base-url=https://your-yapi-domain.com",
         "--yapi-auth-mode=global",
         "--yapi-email=your_email@example.com",
-        "--yapi-password=your_password"
+        "--yapi-password=your_password",
+        "--yapi-toolset=basic"
       ]
     }
   }
 }
 ```
 
-启动后先在对话里调用一次 `yapi_update_token`，会把 `projectId -> token` 缓存到本地 `~/.yapi-mcp/auth-*.json`，并把项目信息缓存到 `~/.yapi-mcp/project-info-*.json`。这些文件包含登录态和项目 token（已尽量使用 `0600` 权限落盘），请不要提交到仓库或分享给他人。部分 YApi 部署不会在开放 API 中直接返回 token，本项目会自动兜底从项目设置页抓取 token。
+启动后先在对话里调用一次 `yapi_update_token`，会把登录态 Cookie 缓存到本地 `~/.yapi-mcp/auth-*.json`，并把项目信息缓存到 `~/.yapi-mcp/project-info-*.json`（已尽量使用 `0600` 权限落盘），请不要提交到仓库或分享给他人。
 
 提示：stdio 模式下为了加快 MCP 启动（避免超时），本项目不会在启动阶段做任何“全量缓存预热请求”。如需更快的工具响应，建议先调用一次 `yapi_update_token`。如 MCP 客户端仍提示启动超时，可在客户端配置中提高 `startup_timeout_sec`。
 
@@ -238,13 +258,13 @@ node dist/cli.js --stdio
 
 ### 获取 YApi Token
 
-如果你使用的是 **全局模式**（`--yapi-auth-mode=global` / `YAPI_AUTH_MODE=global`），可以不手动找项目 token：启动后在对话里调用一次 `yapi_update_token`，会自动登录并把所有可访问项目的 `projectId -> token` 缓存到本地。
+如果你使用的是 **全局模式**（`--yapi-auth-mode=global` / `YAPI_AUTH_MODE=global`），可以不手动找项目 token：启动后在对话里调用一次 `yapi_update_token`，会自动登录并刷新登录态 Cookie（后续请求会走页面同款接口）。
 
 1. 登录你的 YApi 平台
 2. 进入项目设置页面
 3. 在 Token 配置中生成或查看 Token
 
-不想手动找 Token 的话，可以用 [cross-request-master](https://github.com/leeguooooo/cross-request-master) 在接口详情页一键生成 MCP 配置（会自动带上 `projectId:token`）。
+不想手动找 Token 的话，可以用 [cross-request-master](https://github.com/leeguooooo/cross-request-master) 在接口详情页一键生成 **MCP 配置（所有项目）** 或 **Skill 一键安装**。
 
 ![Token 获取示例](./images/token.png)
 
@@ -287,6 +307,7 @@ Token 格式说明：
 | `--yapi-auth-mode` | 鉴权模式：`token` 或 `global` | `--yapi-auth-mode=global`                  | token  |
 | `--yapi-email`     | 全局模式登录邮箱              | `--yapi-email=a@b.com`                     | -      |
 | `--yapi-password`  | 全局模式登录密码              | `--yapi-password=******`                   | -      |
+| `--yapi-toolset`   | 工具集：`basic` 或 `full`      | `--yapi-toolset=basic`                     | basic  |
 | `--yapi-cache-ttl` | 缓存时效（分钟）              | `--yapi-cache-ttl=10`                      | 10     |
 | `--yapi-log-level` | 日志级别                      | `--yapi-log-level=info`                    | info   |
 | `--port`           | HTTP 服务端口（SSE 模式）     | `--port=3388`                              | 3388   |
@@ -304,10 +325,11 @@ YAPI_BASE_URL=https://your-yapi-domain.com
 YAPI_AUTH_MODE=token
 YAPI_TOKEN=projectId:your_token_here
 
-# 模式二：全局模式（只配置一次账号密码，启动后调用 yapi_update_token 缓存项目 token）
+# 模式二：全局模式（只配置一次账号密码，启动后调用 yapi_update_token 刷新登录态 Cookie）
 # YAPI_AUTH_MODE=global
 # YAPI_EMAIL=your_email@example.com
 # YAPI_PASSWORD=your_password
+# YAPI_TOOLSET=basic
 
 # 可选配置
 PORT=3388                    # HTTP 服务端口

@@ -118,7 +118,10 @@ export class YApiService {
    * 获取已配置的项目ID列表
    */
   getConfiguredProjectIds(): string[] {
-    return Array.from(this.tokenMap.keys());
+    const ids = new Set<string>();
+    for (const id of this.tokenMap.keys()) ids.add(String(id));
+    for (const id of this.projectInfoCache.keys()) ids.add(String(id));
+    return Array.from(ids);
   }
 
   /**
@@ -183,13 +186,17 @@ export class YApiService {
     try {
       this.logger.debug(`调用 ${this.baseUrl}${endpoint} 方法: ${method}`);
       
-      // 使用项目ID获取对应的token，如果没有提供项目ID则使用默认token
-      const token = projectId ? this.getToken(projectId) : this.defaultToken;
+      // 使用项目ID获取对应的 token；未提供 projectId 时尽量从任意已配置 token 中挑一个（兼容多项目 token 但未配置默认 token 的场景）
+      const token = projectId ? this.getToken(projectId) : this.getAnyToken();
       const cookieHeader = this.cookieHeader;
       
       if (!token && !cookieHeader) {
         const pid = projectId ? `projectId=${projectId}` : "projectId=未提供";
-        throw new Error(`未配置 token（${pid}）。如使用全局模式，请先调用 yapi_update_token 生成本地缓存；或通过 --yapi-token / YAPI_TOKEN 配置项目 token`);
+        throw new Error(
+          `未配置鉴权信息（${pid}）。` +
+            `请通过 --yapi-token / YAPI_TOKEN 配置项目 token；` +
+            `或在全局模式下配置账号密码并调用 yapi_update_token 刷新登录态 Cookie。`,
+        );
       }
       
       let response;
@@ -250,6 +257,12 @@ export class YApiService {
       if (error instanceof Error) throw error;
       throw new Error(`与YApi服务器通信失败: ${String(error)}`);
     }
+  }
+
+  private getAnyToken(): string {
+    if (this.defaultToken) return this.defaultToken;
+    const it = this.tokenMap.values().next();
+    return it && !it.done && it.value ? String(it.value) : "";
   }
 
   /**

@@ -127,7 +127,7 @@ export class YApiAuthService {
     if (!force && this.isSessionValid(cached)) return cached;
 
     try {
-      this.logger.info("正在登录 YApi 以刷新全局 token...");
+      this.logger.info("正在登录 YApi 以刷新全局登录态（Cookie）...");
       const response = await axios.post(
         `${this.baseUrl}/api/user/login`,
         { email: this.email, password: this.password },
@@ -163,6 +163,14 @@ export class YApiAuthService {
       }
       throw error instanceof Error ? error : new Error("登录失败");
     }
+  }
+
+  /**
+   * 获取可直接用于请求头的 Cookie（必要时会自动登录刷新）。
+   */
+  async getCookieHeaderWithLogin(options: { forceLogin?: boolean } = {}): Promise<string> {
+    const session = await this.login(Boolean(options.forceLogin));
+    return this.getCookieHeader(session);
   }
 
   private async cookieRequest<T>(
